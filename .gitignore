@@ -18,6 +18,9 @@ lms.db-wal
 # All instructor-uploaded assignment files and student submissions live here.
 backend/storage/
 
+# ── Local test fixtures (generated on-the-fly by tests; not committed) ────────
+backend/test_data/
+
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
