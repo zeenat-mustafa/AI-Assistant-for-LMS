@@ -195,3 +195,22 @@ def delete_assignment(
         abs_path.unlink()
     db.delete(f)
     db.commit()
+
+
+# ── Rubric Generation (TEMP) ──────────────────────────────────────────────────
+
+# TEMP: for manual testing only, Sub-feature 8's pipeline will call this automatically instead of exposing it directly
+@router.post(
+    "/{file_id}/generate-rubric",
+    summary="Generate rubric for an assignment file (instructor only) [TEMP]",
+)
+def generate_rubric(
+    session_id: int,
+    file_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _instructor: Annotated[User, Depends(require_instructor)],
+) -> dict:
+    _get_session_or_404(session_id, db)
+    _get_file_or_404(file_id, session_id, db)
+    from app.services.rubric import generate_rubric_for_unsolved_file
+    return generate_rubric_for_unsolved_file(db, file_id)

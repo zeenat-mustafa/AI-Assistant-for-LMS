@@ -33,6 +33,16 @@ class UnsolvedFile(Base):
         default=lambda: datetime.now(timezone.utc),
     )
 
+    @property
+    def rubric_generated(self) -> bool:
+        """True once rubric_json has been populated."""
+        return self.rubric_json is not None
+
+    @rubric_generated.setter
+    def rubric_generated(self, value: bool) -> None:
+        """Allows assigning rubric_generated without altering database schema."""
+        pass
+
     # ── Relationships ──────────────────────────────────────────────────────────
     session: Mapped["LMSSession"] = relationship(  # noqa: F821
         "LMSSession", back_populates="unsolved_files"

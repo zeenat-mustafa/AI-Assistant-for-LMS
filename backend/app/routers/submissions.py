@@ -120,6 +120,26 @@ async def upload_submission(
         "Submission uploaded: student %d → session %d (%s, %d notebook(s))",
         current_user.id, session_id, file.filename, len(submission_files),
     )
+
+    # Phase 2, Sub-feature 2: match each extracted notebook against the
+    # session's unsolved files.  Runs synchronously after commit so that
+    # matched_unsolved_file_id is populated before the response is returned.
+    # Any matching failure is logged as a warning and never raises to the caller.
+    try:
+        from app.services.file_matcher import match_all_files_in_submission
+        match_results = match_all_files_in_submission(db, submission.id)
+        matched_count = sum(1 for r in match_results if r["status"] == "matched")
+        logger.info(
+            "File matching complete: submission %d — %d/%d file(s) matched.",
+            submission.id, matched_count, len(match_results),
+        )
+        db.refresh(submission)
+    except Exception as exc:
+        logger.warning(
+            "File matching failed for submission %d (non-fatal): %s",
+            submission.id, exc, exc_info=True,
+        )
+
     return SubmissionRead.from_orm_model(submission)
 
 

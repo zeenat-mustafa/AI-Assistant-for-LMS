@@ -20,6 +20,8 @@ backend/storage/
 
 # ── Local test fixtures (generated on-the-fly by tests; not committed) ────────
 backend/test_data/
+calibrate_scores.py
+backend/calibrate_scores.py
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
