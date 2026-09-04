@@ -253,3 +253,33 @@ def my_submission(
     if sub is None:
         return None
     return SubmissionRead.from_orm_model(sub)
+
+
+# ── Submission Evaluation (TEMP) ──────────────────────────────────────────────
+
+# TEMP: for manual testing only, Sub-feature 8's pipeline will call this automatically instead of exposing it directly
+@router.post(
+    "/files/{submission_file_id}/evaluate",
+    summary="Evaluate a submission file against its assignment rubric (instructor only) [TEMP]",
+)
+def evaluate_submission(
+    session_id: int,
+    submission_file_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _instructor: Annotated[User, Depends(require_instructor)],
+) -> dict:
+    _get_session_or_404(session_id, db)
+    sub_file = db.get(SubmissionFile, submission_file_id)
+    if sub_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Submission file {submission_file_id} not found.",
+        )
+    if sub_file.submission.session_id != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Submission file {submission_file_id} does not belong to session {session_id}.",
+        )
+    from app.services.evaluator import evaluate_submission_file
+    return evaluate_submission_file(db, submission_file_id)
+
