@@ -22,6 +22,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.unsolved_file import UnsolvedFile
+from app.services.notebook import extract_notebook_structure
+from app.services.storage import absolute_path
 
 logger = logging.getLogger(__name__)
 
@@ -31,24 +33,40 @@ class RubricGenerationError(Exception):
     pass
 
 
-def build_rubric_prompt(requirements_text: str) -> str:
-    """
-    Build a prompt instructing Gemini to read assignment requirements and
-    generate 3-6 gradable criteria totaling 10 marks.
-    """
+def build_rubric_prompt(cells: list[dict[str, Any]]) -> str:
+    """Build a fairness-aware rubric prompt from the ordered notebook cells."""
+    notebook_view = _format_cells_for_prompt(cells)
     return (
-        "You are an expert academic grading assistant. Read the following assignment "
-        "instructions and requirements carefully, then generate 3 to 6 gradable criteria "
-        "worth 10 marks total, distributed across them based on their importance.\n\n"
+        "You are an expert academic grading assistant. Read this unsolved Jupyter "
+        "notebook in its original order and generate a fair rubric with 3 to 6 criteria.\n\n"
         "Instructions:\n"
+        "- Each cell's heuristic_hint is only a rough starting signal and may be wrong "
+        "in either direction. Read the actual content and flow; never treat the hint as authoritative.\n"
+        "- Determine which sections genuinely require student work. This includes a question "
+        "in one markdown cell whose answer belongs in a later response cell, informal "
+        "comments asking for answer/code regardless of wording, TODO-style blanks, and other contextual patterns.\n"
+        "- Put the majority of the 10 marks on work that genuinely requires completion. Across "
+        "all pre-written/scaffolding sections, award at most 1 to 2 marks total, only for "
+        "checks such as 'runs without error'.\n"
+        "- Use 0.5-point increments only.\n"
         "- Respond with ONLY valid JSON.\n"
         "- Do NOT include any markdown fences (no ``` or ```json).\n"
         "- Do NOT include any introductory or explanatory text.\n"
         "- The output must match this exact JSON shape:\n"
         '{"criteria": [{"criterion": str, "points_possible": number}, ...]}\n'
         "- The sum of points_possible across all criteria must equal exactly 10.\n\n"
-        "Assignment Requirements:\n"
-        f"{requirements_text.strip()}\n"
+        "Unsolved Notebook (ordered cells):\n"
+        f"{notebook_view}\n"
+    )
+
+
+def _format_cells_for_prompt(cells: list[dict[str, Any]]) -> str:
+    if not cells:
+        return "(Notebook contains no markdown or code cells.)"
+    return "\n\n".join(
+        f"--- Cell {index} [{cell.get('type', 'unknown')}] heuristic_hint={bool(cell.get('heuristic_hint'))} ---\n"
+        f"{cell.get('content', '')}"
+        for index, cell in enumerate(cells, start=1)
     )
 
 
@@ -180,30 +198,28 @@ def parse_rubric_response(raw_text: str) -> dict[str, Any]:
             "error": "Total points possible must be greater than zero.",
         }
 
-    # If points don't sum to exactly 10 (tolerance 0.01), proportionally rescale
-    if abs(total_points - 10.0) > 0.01:
-        scale = 10.0 / total_points
-        for c in validated_criteria:
-            c["points_possible"] = round(c["points_possible"] * scale, 2)
-
-        # Fix minor rounding discrepancies on the highest-scoring criterion
-        rounding_diff = round(10.0 - sum(c["points_possible"] for c in validated_criteria), 2)
-        if abs(rounding_diff) > 0:
-            max_idx = max(
-                range(len(validated_criteria)),
-                key=lambda i: validated_criteria[i]["points_possible"],
-            )
-            validated_criteria[max_idx]["points_possible"] = round(
-                validated_criteria[max_idx]["points_possible"] + rounding_diff, 2
-            )
-    else:
-        for c in validated_criteria:
-            c["points_possible"] = round(c["points_possible"], 2)
+    # Normalise first, then restrict allocations to half-point increments.
+    scale = 10.0 / total_points
+    for criterion in validated_criteria:
+        criterion["points_possible"] = _round_to_half(criterion["points_possible"] * scale)
+    largest_index = max(
+        range(len(validated_criteria)), key=lambda i: validated_criteria[i]["points_possible"]
+    )
+    remainder = round(10.0 - sum(c["points_possible"] for c in validated_criteria), 1)
+    validated_criteria[largest_index]["points_possible"] = round(
+        validated_criteria[largest_index]["points_possible"] + remainder, 1
+    )
 
     return {"valid": True, "criteria": validated_criteria, "error": None}
 
 
-def generate_rubric_for_unsolved_file(db: Session, unsolved_file_id: int) -> dict[str, Any]:
+def _round_to_half(value: float) -> float:
+    return round(value * 2) / 2
+
+
+def generate_rubric_for_unsolved_file(
+    db: Session, unsolved_file_id: int, force: bool = False
+) -> dict[str, Any]:
     """
     Orchestrate rubric generation for an UnsolvedFile.
 
@@ -225,7 +241,7 @@ def generate_rubric_for_unsolved_file(db: Session, unsolved_file_id: int) -> dic
             }
 
         # Cached reuse check: return immediately if already generated
-        if unsolved.rubric_generated and unsolved.rubric_json:
+        if not force and unsolved.rubric_generated and unsolved.rubric_json:
             try:
                 cached = (
                     json.loads(unsolved.rubric_json)
@@ -241,14 +257,16 @@ def generate_rubric_for_unsolved_file(db: Session, unsolved_file_id: int) -> dic
                     exc,
                 )
 
-        requirements = (unsolved.parsed_requirements_text or "").strip()
-        if not requirements:
+        structure = extract_notebook_structure(str(absolute_path(unsolved.file_path)))
+        if not structure["valid"]:
             return {
                 "success": False,
-                "error": "no requirements text available",
+                "error": f"Could not extract assignment notebook structure: {structure['error']}",
             }
+        if not structure["cells"]:
+            return {"success": False, "error": "assignment notebook contains no markdown or code cells"}
 
-        prompt = build_rubric_prompt(requirements)
+        prompt = build_rubric_prompt(structure["cells"])
 
         # First attempt
         raw_text = ""

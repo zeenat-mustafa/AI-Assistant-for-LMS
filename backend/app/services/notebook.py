@@ -14,6 +14,7 @@ propagating the exception to callers.
 import io
 import logging
 import os
+import re
 import zipfile
 from pathlib import Path
 from typing import Union
@@ -190,6 +191,79 @@ def extract_requirements_text(ipynb_path: Union[str, Path]) -> str:
         )
         return ""
     return parsed["markdown_text"]
+
+
+def extract_notebook_structure(ipynb_path: str) -> dict:
+    """Return ordered notebook cells with a rough, non-authoritative work hint.
+
+    ``heuristic_hint`` only highlights cells that often invite a student
+    response.  The grading model must still read the entire notebook flow and
+    decide what was genuinely supplied versus expected from the student.
+    """
+    result: dict = {"valid": False, "cells": [], "error": None}
+    try:
+        path = Path(ipynb_path)
+        if not path.exists():
+            result["error"] = f"File not found: {ipynb_path}"
+            return result
+        if path.stat().st_size == 0:
+            result["error"] = f"File is empty: {ipynb_path}"
+            return result
+        raw = path.read_bytes()
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            result["error"] = f"File does not appear to be valid UTF-8 text: {ipynb_path}"
+            return result
+        try:
+            notebook = nbformat.read(io.StringIO(text), as_version=nbformat.NO_CONVERT)
+        except nbformat.reader.NotJSONError:
+            result["error"] = f"Notebook file contains invalid JSON: {ipynb_path}"
+            return result
+        except Exception as exc:
+            result["error"] = f"nbformat could not parse notebook ({type(exc).__name__}): {exc}"
+            return result
+
+        cells: list[dict] = []
+        for cell in notebook.get("cells", []):
+            cell_type = cell.get("cell_type")
+            if cell_type not in ("markdown", "code"):
+                continue
+            content = cell.get("source", "") or ""
+            hint = _code_completion_hint(content) if cell_type == "code" else _markdown_completion_hint(content)
+            cells.append({"type": cell_type, "content": content, "heuristic_hint": hint})
+        result.update(valid=True, cells=cells, error=None)
+    except Exception as exc:
+        logger.warning("Unexpected error while extracting structure from '%s': %s", ipynb_path, exc, exc_info=True)
+        result["error"] = f"Unexpected parse error ({type(exc).__name__}): {exc}"
+    return result
+
+
+def _code_completion_hint(content: str) -> bool:
+    """Recognise common completion placeholders; this is a hint, never a verdict."""
+    phrases = (
+        "todo", "your code here", "your answer", "answer here", "your code",
+        "fill in", "complete this", "write your",
+    )
+    return (
+        any(phrase in content.lower() for phrase in phrases)
+        or re.search(r"(?<!\S)\.\.\.(?!\S)", content) is not None
+        or re.search(r"_{3,}", content) is not None
+    )
+
+
+def _markdown_completion_hint(content: str) -> bool:
+    """Recognise empty response areas without assuming every wording is known."""
+    stripped = content.strip()
+    if not stripped:
+        return True
+    lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+    bare_list = re.compile(r"(?:\d+[.)]|[-*+])\s*$")
+    if lines and all(bare_list.fullmatch(line) for line in lines):
+        return True
+    heading = re.sub(r"^#+\s*", "", stripped).strip().rstrip(":").lower()
+    heading = re.sub(r"\s+", " ", heading)
+    return heading in {"your analysis", "your answer", "response"}
 
 
 def extract_notebooks_from_zip(

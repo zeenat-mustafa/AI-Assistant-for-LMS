@@ -127,13 +127,29 @@ def seeded_db(db):
     return db
 
 
+@pytest.fixture(autouse=True)
+def mock_assignment_structure(monkeypatch):
+    """Service tests do not persist fixture notebooks to local storage."""
+    monkeypatch.setattr(
+        "app.services.rubric.extract_notebook_structure",
+        lambda _path: {
+            "valid": True,
+            "cells": [
+                {"type": "markdown", "content": "Implement model and test.", "heuristic_hint": False},
+                {"type": "code", "content": "# TODO: student work", "heuristic_hint": True},
+            ],
+            "error": None,
+        },
+    )
+
+
 # ===========================================================================
 # 1. Prompt building
 # ===========================================================================
 
 def test_build_rubric_prompt():
-    req_text = "Task 1: Clean data. Task 2: Fit model."
-    prompt = build_rubric_prompt(req_text)
+    cells = [{"type": "markdown", "content": "Task 1: Clean data. Task 2: Fit model.", "heuristic_hint": False}]
+    prompt = build_rubric_prompt(cells)
     assert "Task 1: Clean data" in prompt
     assert "criteria" in prompt
     assert "10" in prompt
@@ -201,6 +217,29 @@ def test_parse_rubric_response_rescaling_rounding_adjustment():
     assert parsed["valid"] is True
     total = sum(c["points_possible"] for c in parsed["criteria"])
     assert total == 10.0
+    assert all((criterion["points_possible"] * 2).is_integer() for criterion in parsed["criteria"])
+
+
+def test_rubric_prompt_treats_later_response_cells_as_context_not_keyword_proof():
+    prompt = build_rubric_prompt([
+        {"type": "markdown", "content": "Explain your model choice.", "heuristic_hint": False},
+        {"type": "markdown", "content": "Your Analysis:", "heuristic_hint": True},
+        {"type": "code", "content": "import pandas as pd", "heuristic_hint": False},
+    ])
+    assert "heuristic_hint=False" in prompt
+    assert "heuristic_hint=True" in prompt
+    assert "question in one markdown cell" in prompt
+    assert "at most 1 to 2 marks" in prompt
+
+
+def test_fully_prewritten_notebook_prompt_limits_runs_correctly_weight():
+    prompt = build_rubric_prompt([
+        {"type": "markdown", "content": "Run the supplied example.", "heuristic_hint": False},
+        {"type": "code", "content": "print('provided result')", "heuristic_hint": False},
+    ])
+    assert "majority of the 10 marks" in prompt
+    assert "at most 1 to 2 marks total" in prompt
+    assert "runs without error" in prompt
 
 
 def test_parse_rubric_response_malformed_json():
@@ -317,15 +356,32 @@ def test_generate_rubric_cached_reuse_no_gemini_call(mock_gemini, seeded_db):
 
 
 @patch("app.services.rubric.call_gemini_for_rubric")
-def test_generate_rubric_missing_requirements(mock_gemini, seeded_db):
+def test_force_regeneration_overwrites_cached_rubric(mock_gemini, seeded_db):
+    row = seeded_db.get(UnsolvedFile, 100)
+    row.rubric_json = json.dumps({"criteria": [{"criterion": "Old", "points_possible": 10.0}]})
+    seeded_db.commit()
+    fresh = {"criteria": [{"criterion": "New work", "points_possible": 10.0}]}
+    mock_gemini.return_value = json.dumps(fresh)
+    result = generate_rubric_for_unsolved_file(seeded_db, 100, force=True)
+    assert result["success"] is True
+    assert result["rubric"] == fresh
+    assert mock_gemini.call_count == 1
+
+
+@patch("app.services.rubric.call_gemini_for_rubric")
+def test_generate_rubric_missing_requirements(mock_gemini, seeded_db, monkeypatch):
     file_row = seeded_db.get(UnsolvedFile, 100)
     file_row.parsed_requirements_text = None
     seeded_db.commit()
+    monkeypatch.setattr(
+        "app.services.rubric.extract_notebook_structure",
+        lambda _path: {"valid": False, "cells": [], "error": "File corrupted"},
+    )
 
     result = generate_rubric_for_unsolved_file(seeded_db, unsolved_file_id=100)
 
     assert result["success"] is False
-    assert "no requirements text available" in result["error"]
+    assert "File corrupted" in result["error"]
     mock_gemini.assert_not_called()
 
 

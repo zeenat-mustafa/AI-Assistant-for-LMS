@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -291,8 +291,9 @@ def generate_rubric(
     file_id: int,
     db: Annotated[Session, Depends(get_db)],
     _instructor: Annotated[User, Depends(require_instructor)],
+    force: bool = Query(False, description="Regenerate and overwrite an existing cached rubric."),
 ) -> dict:
     _get_session_or_404(session_id, db)
     _get_file_or_404(file_id, session_id, db)
     from app.services.rubric import generate_rubric_for_unsolved_file
-    return generate_rubric_for_unsolved_file(db, file_id)
+    return generate_rubric_for_unsolved_file(db, file_id, force=force)

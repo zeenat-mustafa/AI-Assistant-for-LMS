@@ -166,6 +166,21 @@ def seeded_db(db):
     return db
 
 
+@pytest.fixture(autouse=True)
+def mock_notebook_structures(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.evaluator.extract_notebook_structure",
+        lambda _path: {
+            "valid": True,
+            "cells": [
+                {"type": "markdown", "content": "Answer the question below.", "heuristic_hint": False},
+                {"type": "code", "content": "# answer here", "heuristic_hint": True},
+            ],
+            "error": None,
+        },
+    )
+
+
 # ===========================================================================
 # 1. Prompt Building
 # ===========================================================================
@@ -177,8 +192,9 @@ def test_build_evaluation_prompt():
             {"criterion": "Code Quality", "points_possible": 5.0},
         ]
     }
-    code_text = "--- Cell 1 [code] ---\nimport torch\n[outputs]\n1.0"
-    prompt = build_evaluation_prompt(rubric, code_text)
+    unsolved_cells = [{"type": "code", "content": "import torch", "heuristic_hint": False}]
+    submission_cells = [{"type": "code", "content": "import torch\n[recorded outputs]\n1.0", "heuristic_hint": False}]
+    prompt = build_evaluation_prompt(rubric, unsolved_cells, submission_cells)
 
     assert "Model Accuracy" in prompt
     assert "Code Quality" in prompt
@@ -257,6 +273,21 @@ def test_parse_evaluation_response_clean_json():
     assert len(parsed["criteria"]) == 2
     assert parsed["criteria"][0]["points_awarded"] == 2.5
     assert parsed["criteria"][1]["points_awarded"] == 6.5
+
+
+def test_parse_evaluation_response_rounds_awards_and_total_to_half_points():
+    rubric = {"criteria": [
+        {"criterion": "A", "points_possible": 5.0},
+        {"criterion": "B", "points_possible": 5.0},
+    ]}
+    raw = json.dumps({"criteria": [
+        {"criterion": "A", "points_awarded": 2.26, "explanation": "x"},
+        {"criterion": "B", "points_awarded": 4.74, "explanation": "y"},
+    ]})
+    parsed = parse_evaluation_response(raw, rubric)
+    assert parsed["valid"] is True
+    assert [row["points_awarded"] for row in parsed["criteria"]] == [2.5, 4.5]
+    assert parsed["total_score"] == 7.0
 
 
 def test_parse_evaluation_response_with_markdown_fences():

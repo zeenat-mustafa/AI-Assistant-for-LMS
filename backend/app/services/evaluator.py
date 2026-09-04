@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models.submission_file import SubmissionFile
 from app.models.unsolved_file import UnsolvedFile
-from app.services.notebook import parse_notebook_file
+from app.services.notebook import extract_notebook_structure, parse_notebook_file
 from app.services.rubric import generate_rubric_for_unsolved_file
 from app.services.storage import absolute_path
 
@@ -37,7 +37,11 @@ class EvaluationError(Exception):
     pass
 
 
-def build_evaluation_prompt(rubric: dict[str, Any], code_and_outputs_text: str) -> str:
+def build_evaluation_prompt(
+    rubric: dict[str, Any],
+    unsolved_cells: list[dict[str, Any]],
+    submission_cells: list[dict[str, Any]],
+) -> str:
     """
     Build a prompt giving Gemini the rubric criteria and the student's actual
     code + cell outputs (plain text), instructing it to award points per criterion
@@ -48,17 +52,26 @@ def build_evaluation_prompt(rubric: dict[str, Any], code_and_outputs_text: str) 
     """
     criteria_list = rubric.get("criteria", []) if isinstance(rubric, dict) else rubric
     rubric_formatted = json.dumps({"criteria": criteria_list}, indent=2)
+    unsolved_view = _format_cells_for_evaluation(unsolved_cells)
+    submission_view = _format_cells_for_evaluation(submission_cells)
 
     return (
         "You are an expert academic grading assistant. Evaluate the following student's "
         "Jupyter notebook submission against the provided rubric.\n\n"
         "Grading Instructions:\n"
-        "1. For each criterion in the rubric, inspect the student's actual code and cell outputs.\n"
-        "2. Award points ('points_awarded') for each criterion based on correctness and completeness.\n"
-        "3. You must NEVER award more than that criterion's 'points_possible', and never award negative points.\n"
-        "4. Provide a concise, constructive explanation for the points awarded on each criterion.\n"
+        "1. Inspect corresponding ordered cells and their recorded outputs.\n"
+        "2. heuristic_hint is only a rough starting signal and may be wrong in either direction. "
+        "Use actual content and notebook flow to decide what student input was expected, including "
+        "questions followed by later response cells and informal answer/code prompts.\n"
+        "3. Most marks must assess genuinely student-completed work. For pre-written sections, assess "
+        "only the rubric's small runs-correctly portion: verify no error output and, where the unsolved "
+        "version records output, a submitted output consistent with correct execution.\n"
+        "4. Award points ('points_awarded') for each criterion based on correctness and completeness.\n"
+        "5. You must NEVER award more than that criterion's 'points_possible', and never award negative points.\n"
+        "6. Provide a concise, constructive explanation for the points awarded on each criterion.\n"
         "5. Respond with ONLY valid JSON — absolutely no markdown fences (no ``` or ```json), "
         "and no conversational text before or after.\n\n"
+        "Award points in 0.5-point increments only.\n"
         "Required JSON Output Shape:\n"
         "{\n"
         '  "criteria": [\n'
@@ -71,7 +84,18 @@ def build_evaluation_prompt(rubric: dict[str, Any], code_and_outputs_text: str) 
         '  ]\n'
         "}\n\n"
         f"Rubric:\n{rubric_formatted}\n\n"
-        f"Student Submission (Code Cells and Outputs):\n{code_and_outputs_text.strip()}\n"
+        f"Unsolved Notebook (ordered cells):\n{unsolved_view}\n\n"
+        f"Student Submission (corresponding ordered cells and recorded outputs):\n{submission_view}\n"
+    )
+
+
+def _format_cells_for_evaluation(cells: list[dict[str, Any]]) -> str:
+    if not cells:
+        return "(No cells available.)"
+    return "\n\n".join(
+        f"--- Cell {index} [{cell.get('type', 'unknown')}] heuristic_hint={bool(cell.get('heuristic_hint'))} ---\n"
+        f"{cell.get('content', '')}"
+        for index, cell in enumerate(cells, start=1)
     )
 
 
@@ -224,22 +248,23 @@ def parse_evaluation_response(raw_text: str, rubric: dict[str, Any]) -> dict[str
         except (ValueError, TypeError):
             points_awarded = 0.0
 
-        # Clamp points awarded to [0, points_possible]
+        # Clamp and normalize every awarded score to a half-point increment.
         points_awarded = max(0.0, min(points_possible, points_awarded))
-        points_awarded = round(points_awarded, 2)
+        points_awarded = _round_to_half(points_awarded)
+        points_awarded = max(0.0, min(points_possible, points_awarded))
 
         explanation = str(matched.get("explanation", "")).strip()
         running_total += points_awarded
 
         validated_criteria.append({
             "criterion": expected_name,
-            "points_possible": round(points_possible, 2),
+            "points_possible": _round_to_half(points_possible),
             "points_awarded": points_awarded,
             "explanation": explanation,
         })
 
     # Clamp total score between 0.0 and 10.0
-    total_score = round(max(0.0, min(10.0, running_total)), 2)
+    total_score = _round_to_half(max(0.0, min(10.0, running_total)))
 
     return {
         "valid": True,
@@ -247,6 +272,10 @@ def parse_evaluation_response(raw_text: str, rubric: dict[str, Any]) -> dict[str
         "total_score": total_score,
         "error": None,
     }
+
+
+def _round_to_half(value: float) -> float:
+    return round(value * 2) / 2
 
 
 def evaluate_submission_file(db: Session, submission_file_id: int) -> dict[str, Any]:
@@ -313,6 +342,13 @@ def evaluate_submission_file(db: Session, submission_file_id: int) -> dict[str, 
                 }
             rubric = rubric_res["rubric"]
 
+        unsolved_structure = extract_notebook_structure(str(absolute_path(unsolved.file_path)))
+        if not unsolved_structure.get("valid"):
+            return {
+                "success": False,
+                "error": f"Failed to parse unsolved notebook: {unsolved_structure.get('error')}",
+            }
+
         # Parse submission notebook
         abs_ipynb_path = absolute_path(sub_file.extracted_ipynb_path)
         nb_parsed = parse_notebook_file(abs_ipynb_path)
@@ -322,25 +358,21 @@ def evaluate_submission_file(db: Session, submission_file_id: int) -> dict[str, 
                 "error": f"Failed to parse submission notebook: {nb_parsed.get('error')}",
             }
 
-        # Build plain-text block of code cells and their execution outputs
-        code_cells = nb_parsed.get("code_cells", [])
-        if not code_cells:
-            code_and_outputs_text = "(Notebook contains no code cells.)"
-        else:
-            blocks: list[str] = []
-            for idx, cell in enumerate(code_cells, start=1):
-                source = (cell.get("source") or "").strip()
-                outputs = cell.get("outputs") or []
-                output_str = "\n".join(str(out) for out in outputs if str(out).strip()).strip()
-
-                cell_block = f"--- Cell {idx} [code] ---\n{source}"
-                if output_str:
-                    cell_block += f"\n[outputs]\n{output_str}"
-                blocks.append(cell_block)
-            code_and_outputs_text = "\n\n".join(blocks)
+        submission_structure = extract_notebook_structure(str(abs_ipynb_path))
+        if not submission_structure.get("valid"):
+            return {
+                "success": False,
+                "error": f"Failed to extract submission structure: {submission_structure.get('error')}",
+            }
+        _append_recorded_outputs(submission_structure["cells"], nb_parsed.get("code_cells", []))
+        unsolved_parsed = parse_notebook_file(absolute_path(unsolved.file_path))
+        if unsolved_parsed.get("valid"):
+            _append_recorded_outputs(unsolved_structure["cells"], unsolved_parsed.get("code_cells", []))
 
         # Build prompt and invoke Gemini
-        prompt = build_evaluation_prompt(rubric, code_and_outputs_text)
+        prompt = build_evaluation_prompt(
+            rubric, unsolved_structure["cells"], submission_structure["cells"]
+        )
 
         try:
             raw_eval_response = call_gemini_for_evaluation(prompt)
@@ -381,3 +413,17 @@ def evaluate_submission_file(db: Session, submission_file_id: int) -> dict[str, 
             "success": False,
             "error": f"Unexpected error: {exc}",
         }
+
+
+def _append_recorded_outputs(cells: list[dict[str, Any]], code_cells: list[dict[str, Any]]) -> None:
+    """Append parsed outputs to matching code-cell content for prompt context."""
+    code_iter = iter(code_cells)
+    for cell in cells:
+        if cell.get("type") != "code":
+            continue
+        parsed_code = next(code_iter, None)
+        if not parsed_code:
+            continue
+        outputs = [str(item) for item in parsed_code.get("outputs", []) if str(item).strip()]
+        if outputs:
+            cell["content"] = f"{cell.get('content', '')}\n[recorded outputs]\n" + "\n".join(outputs)

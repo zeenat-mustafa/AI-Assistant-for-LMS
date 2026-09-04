@@ -47,6 +47,7 @@ import sys, os
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.services.notebook import (
+    extract_notebook_structure,
     extract_notebooks_from_zip,
     extract_requirements_text,
     parse_notebook_file,
@@ -265,6 +266,41 @@ class TestExtractRequirementsText:
 
         text = extract_requirements_text(str(nb_file))
         assert "World" in text
+
+
+class TestExtractNotebookStructure:
+
+    def test_mixed_scaffolding_and_todo_cells_are_ordered_with_hints(self, tmp_path):
+        notebook = _make_notebook(
+            markdown_cells=["# Linear Regression\nRead the provided setup."],
+            code_cells=[
+                {"source": "import numpy as np\nX = np.array([1, 2])"},
+                {"source": "# TODO: fit the model\nweights = ..."},
+                {"source": "#answer here"},
+            ],
+        )
+        path = tmp_path / "mixed.ipynb"
+        path.write_bytes(notebook)
+        result = extract_notebook_structure(str(path))
+        assert result["valid"] is True
+        assert [cell["type"] for cell in result["cells"]] == ["markdown", "code", "code", "code"]
+        assert result["cells"][1]["heuristic_hint"] is False
+        assert result["cells"][2]["heuristic_hint"] is True
+        assert result["cells"][3]["heuristic_hint"] is True
+
+    def test_question_and_later_empty_response_cell_preserve_context(self, tmp_path):
+        notebook = _make_notebook(markdown_cells=[
+            "Explain why feature scaling matters before gradient descent.",
+            "Your Analysis:",
+            "1.\n2.\n3.",
+        ])
+        path = tmp_path / "analysis.ipynb"
+        path.write_bytes(notebook)
+        result = extract_notebook_structure(str(path))
+        assert result["valid"] is True
+        assert result["cells"][0]["heuristic_hint"] is False
+        assert result["cells"][1]["heuristic_hint"] is True
+        assert result["cells"][2]["heuristic_hint"] is True
 
 
 # ===========================================================================
