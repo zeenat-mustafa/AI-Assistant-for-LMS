@@ -638,20 +638,18 @@ def test_temporary_evaluation_endpoint(client_with_data):
     )
     assert res_notfound.status_code == 404
 
-    # 4. Instructor calls successfully
-    mock_eval = {
+    # 4. Instructor calls successfully — endpoint now calls generate_feedback_and_persist
+    # which returns {success, grade_id, score, feedback_text} (Sub-feature 5 shape).
+    mock_grade = {
         "success": True,
-        "total_score": 9.5,
-        "criteria": [
-            {
-                "criterion": "Code Quality",
-                "points_possible": 10.0,
-                "points_awarded": 9.5,
-                "explanation": "Clean and well structured code.",
-            }
-        ],
+        "grade_id": 1,
+        "score": 9.5,
+        "feedback_text": (
+            "Score: 9.5/10.\n"
+            "- Code Quality: 9.5/10.0 — Clean and well structured code."
+        ),
     }
-    with patch("app.services.evaluator.evaluate_submission_file", return_value=mock_eval):
+    with patch("app.services.feedback.generate_feedback_and_persist", return_value=mock_grade):
         res_instructor = client.post(
             "/api/v1/sessions/10/submissions/files/300/evaluate",
             headers={"Authorization": f"Bearer {instructor_token}"},
@@ -659,5 +657,6 @@ def test_temporary_evaluation_endpoint(client_with_data):
         assert res_instructor.status_code == 200
         data = res_instructor.json()
         assert data["success"] is True
-        assert data["total_score"] == 9.5
-        assert len(data["criteria"]) == 1
+        assert data["grade_id"] == 1
+        assert data["score"] == 9.5
+        assert "Score: 9.5/10." in data["feedback_text"]

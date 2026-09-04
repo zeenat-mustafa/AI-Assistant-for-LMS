@@ -1,4 +1,4 @@
-from sqlalchemy import String, ForeignKey
+from sqlalchemy import Boolean, String, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -28,6 +28,8 @@ class SubmissionFile(Base):
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     # Path to the extracted .ipynb on disk, relative to storage_root.
     extracted_ipynb_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Set to True once a Grade record has been successfully persisted for this file.
+    graded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # ── Relationships ──────────────────────────────────────────────────────────
     submission: Mapped["Submission"] = relationship(  # noqa: F821

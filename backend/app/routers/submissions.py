@@ -255,12 +255,20 @@ def my_submission(
     return SubmissionRead.from_orm_model(sub)
 
 
-# ── Submission Evaluation (TEMP) ──────────────────────────────────────────────
+# ── Submission Evaluation + Grade Persistence (TEMP) ─────────────────────────
 
-# TEMP: for manual testing only, Sub-feature 8's pipeline will call this automatically instead of exposing it directly
+# TEMP: for manual testing only — Sub-feature 8's full pipeline will replace
+# this with a batch endpoint that handles every student in one call.
+# This endpoint now persists a real Grade record (Sub-feature 5) so the
+# existing Phase 1 GET /grades endpoints return real data immediately.
 @router.post(
     "/files/{submission_file_id}/evaluate",
-    summary="Evaluate a submission file against its assignment rubric (instructor only) [TEMP]",
+    summary=(
+        "Evaluate a submission file and persist its grade (instructor only) [TEMP]. "
+        "Calls generate_feedback_and_persist: evaluates the notebook, assembles "
+        "human-readable feedback from the per-criterion explanations, and writes "
+        "a Grade record to the database. Re-calling overwrites the existing grade."
+    ),
 )
 def evaluate_submission(
     session_id: int,
@@ -280,6 +288,6 @@ def evaluate_submission(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Submission file {submission_file_id} does not belong to session {session_id}.",
         )
-    from app.services.evaluator import evaluate_submission_file
-    return evaluate_submission_file(db, submission_file_id)
+    from app.services.feedback import generate_feedback_and_persist
+    return generate_feedback_and_persist(db, submission_file_id)
 
