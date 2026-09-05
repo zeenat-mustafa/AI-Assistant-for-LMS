@@ -27,6 +27,13 @@ class UserCreate(BaseModel):
     role: UserRole
 
 
+class UserRegister(BaseModel):
+    """Request body for POST /auth/register (public, students only)."""
+    name: str
+    email: str
+    password: str
+
+
 class UserRead(BaseModel):
     """Safe outward-facing representation of a User (no password)."""
     id: int

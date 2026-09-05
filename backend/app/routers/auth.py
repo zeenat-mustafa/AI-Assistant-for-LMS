@@ -11,11 +11,12 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.user import User
-from app.schemas.user import Token, UserRead
+from app.models.user import User, UserRole
+from app.schemas.user import Token, UserRead, UserRegister
 from app.services.auth import (
     create_access_token,
     get_current_user,
+    hash_password,
     verify_password,
 )
 
@@ -45,3 +46,36 @@ def login(
 @router.get("/me", response_model=UserRead, summary="Return the current user")
 def me(current_user: Annotated[User, Depends(get_current_user)]) -> UserRead:
     return UserRead.model_validate(current_user)
+
+
+@router.post(
+    "/register",
+    response_model=UserRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new student account",
+)
+def register(
+    body: UserRegister,
+    db: Annotated[Session, Depends(get_db)],
+) -> UserRead:
+    """
+    Public endpoint — no auth required.
+    Always creates a ``student`` account; role cannot be set by the caller.
+    Returns 409 if the email is already taken.
+    """
+    existing = db.query(User).filter(User.email == body.email).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An account with email '{body.email}' already exists.",
+        )
+    user = User(
+        name=body.name,
+        email=body.email,
+        hashed_password=hash_password(body.password),
+        role=UserRole.student,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return UserRead.model_validate(user)

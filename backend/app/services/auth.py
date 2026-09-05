@@ -111,8 +111,16 @@ def require_student(
 
 def seed_demo_users(db: Session) -> None:
     """
-    Idempotently create the two demo users on first startup.
+    Idempotently create demo users on first startup.
     Called from main.py lifespan — safe to call multiple times.
+
+    Seeded accounts
+    ---------------
+    instructor@demo.com  / instructor123   — instructor
+    student@demo.com     / student123      — student (student 1)
+    student2@demo.com    / student2pass    — student
+    student3@demo.com    / student3pass    — student
+    student4@demo.com    / student4pass    — student
     """
     _ensure_user(
         db,
@@ -126,6 +134,27 @@ def seed_demo_users(db: Session) -> None:
         name="Demo Student",
         email=settings.demo_student_email,
         password=settings.demo_student_password,
+        role=UserRole.student,
+    )
+    _ensure_user(
+        db,
+        name="Test Student 2",
+        email="student2@demo.com",
+        password="student2pass",
+        role=UserRole.student,
+    )
+    _ensure_user(
+        db,
+        name="Test Student 3",
+        email="student3@demo.com",
+        password="student3pass",
+        role=UserRole.student,
+    )
+    _ensure_user(
+        db,
+        name="Test Student 4",
+        email="student4@demo.com",
+        password="student4pass",
         role=UserRole.student,
     )
     db.commit()
