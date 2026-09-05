@@ -1,5 +1,5 @@
 """
-Batch grading pipeline — Phase 2, Sub-feature 7.
+Batch grading pipeline — Phase 2, Sub-feature 7/8.
 
 Provides two public callables:
 
@@ -17,7 +17,8 @@ Provides two public callables:
                                    "failures": [{"student_id", "filename", "error"}, ...]}
 
         Individual failures never abort the batch.  Phase 3 will consume this
-        generator over SSE; the TEMP endpoint in sessions.py drains it eagerly.
+        generator over SSE; the POST /sessions/{id}/grade endpoint in
+        sessions.py drains it eagerly and returns all events at once.
 """
 
 import logging

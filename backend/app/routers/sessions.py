@@ -5,7 +5,7 @@ POST   /sessions                              → create a new session
 GET    /sessions                              → list all sessions (paginated)
 GET    /sessions/{session_id}                 → get one session with its assignment files
 DELETE /sessions/{session_id}                 → delete session + all stored files (instructor only)
-POST   /sessions/{session_id}/grade-batch     → TEMP: eagerly drain grading generator (instructor only)
+POST   /sessions/{session_id}/grade           → grade all ungraded submissions in a session (instructor only)
 """
 
 from typing import Annotated
@@ -126,15 +126,15 @@ def delete_session(
     delete_session_storage(session_id)
 
 
-# TEMP — Phase 3 will replace this with a proper SSE/streaming endpoint triggered
-# by the chatbot.  Sub-feature 8 may also expose a cleaner non-temp version.
+# ── Batch session grading ─────────────────────────────────────────────────────
+
 @router.post(
-    "/{session_id}/grade-batch",
-    summary="[TEMP] Grade all ungraded submissions in a session (instructor only)",
+    "/{session_id}/grade",
+    summary="Grade all ungraded submissions in a session (instructor only)",
     response_model=None,
     status_code=status.HTTP_200_OK,
 )
-def grade_batch(
+def grade_session(
     session_id: int,
     db: Annotated[Session, Depends(get_db)],
     _instructor: Annotated[User, Depends(require_instructor)],
@@ -143,10 +143,12 @@ def grade_batch(
     Eagerly drains the ``grade_session_batch`` generator and returns every
     event plus the final summary in a single JSON response.
 
-    This is intentionally synchronous and blocking — it is a temporary
-    diagnostic endpoint so instructors can trigger a full batch grade and
-    inspect results via Swagger.  Phase 3 will replace it with a streaming
-    SSE response that consumes the same generator incrementally.
+    Processes every ungraded SubmissionFile in the session one at a time.
+    Individual file failures never abort the batch — each is recorded in the
+    ``failures`` list and reflected in the summary counts.
+
+    Phase 3 will replace this with a streaming SSE response that consumes
+    the same generator incrementally.
 
     Response shape::
 

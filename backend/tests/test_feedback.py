@@ -34,8 +34,8 @@ Cases covered
    - Failed evaluation (Gemini error) returns success=False and NO Grade row created
    - SubmissionFile.graded is False before and True after successful persist
 
-5. TEMP endpoint (POST /api/v1/sessions/{session_id}/submissions/files/{id}/evaluate)
-   - Instructor receives success response with grade_id, score, feedback_text
+5. Endpoint (POST /api/v1/sessions/{session_id}/submissions/files/{id}/grade)
+   - Instructor receives success response with submission_file_id, score, success
    - Student receives 403 Forbidden
    - Unauthenticated request receives 401
    - Non-existent submission file returns 404
@@ -513,7 +513,7 @@ class TestGenerateFeedbackAndPersist:
 
 
 # ===========================================================================
-# 5. TEMP endpoint via TestClient
+# 5. Endpoint via TestClient — POST /sessions/{id}/submissions/files/{id}/grade
 # ===========================================================================
 
 @pytest.fixture()
@@ -578,17 +578,17 @@ _MOCK_PERSIST_RESULT = {
 }
 
 
-class TestTempEvaluateEndpoint:
+class TestGradeSubmissionFileEndpoint:
 
     def test_unauthenticated_returns_401(self, client_with_data):
         c, *_ = client_with_data
-        res = c.post("/api/v1/sessions/10/submissions/files/300/evaluate")
+        res = c.post("/api/v1/sessions/10/submissions/files/300/grade")
         assert res.status_code == 401
 
     def test_student_returns_403(self, client_with_data):
         c, _, student_token, *_ = client_with_data
         res = c.post(
-            "/api/v1/sessions/10/submissions/files/300/evaluate",
+            "/api/v1/sessions/10/submissions/files/300/grade",
             headers={"Authorization": f"Bearer {student_token}"},
         )
         assert res.status_code == 403
@@ -596,7 +596,7 @@ class TestTempEvaluateEndpoint:
     def test_nonexistent_submission_file_returns_404(self, client_with_data):
         c, instructor_token, *_ = client_with_data
         res = c.post(
-            "/api/v1/sessions/10/submissions/files/999/evaluate",
+            "/api/v1/sessions/10/submissions/files/999/grade",
             headers={"Authorization": f"Bearer {instructor_token}"},
         )
         assert res.status_code == 404
@@ -620,7 +620,7 @@ class TestTempEvaluateEndpoint:
 
         # File 999 belongs to session 99, not session 10
         res = c.post(
-            "/api/v1/sessions/10/submissions/files/999/evaluate",
+            "/api/v1/sessions/10/submissions/files/999/grade",
             headers={"Authorization": f"Bearer {instructor_token}"},
         )
         assert res.status_code == 404
@@ -628,21 +628,29 @@ class TestTempEvaluateEndpoint:
     def test_instructor_receives_success_response_with_grade(self, client_with_data):
         c, instructor_token, *_ = client_with_data
 
+        # grade_single_submission_file returns {success, score, student_id, filename,
+        # submission_file_id} — mock at the pipeline level.
+        mock_result = {
+            "submission_file_id": 300,
+            "student_id": 2,
+            "filename": "hw1_sub.ipynb",
+            "success": True,
+            "score": 9.0,
+        }
         with patch(
-            "app.services.feedback.generate_feedback_and_persist",
-            return_value=_MOCK_PERSIST_RESULT,
+            "app.services.grading_pipeline.grade_single_submission_file",
+            return_value=mock_result,
         ):
             res = c.post(
-                "/api/v1/sessions/10/submissions/files/300/evaluate",
+                "/api/v1/sessions/10/submissions/files/300/grade",
                 headers={"Authorization": f"Bearer {instructor_token}"},
             )
 
         assert res.status_code == 200
         data = res.json()
         assert data["success"] is True
-        assert data["grade_id"] == 1
         assert data["score"] == 9.0
-        assert "Score: 9.0/10." in data["feedback_text"]
+        assert data["submission_file_id"] == 300
 
     def test_regrading_same_file_returns_success_not_error(self, client_with_data):
         """
@@ -651,16 +659,23 @@ class TestTempEvaluateEndpoint:
         """
         c, instructor_token, *_ = client_with_data
 
+        mock_result = {
+            "submission_file_id": 300,
+            "student_id": 2,
+            "filename": "hw1_sub.ipynb",
+            "success": True,
+            "score": 9.0,
+        }
         with patch(
-            "app.services.feedback.generate_feedback_and_persist",
-            return_value=_MOCK_PERSIST_RESULT,
+            "app.services.grading_pipeline.grade_single_submission_file",
+            return_value=mock_result,
         ):
             res1 = c.post(
-                "/api/v1/sessions/10/submissions/files/300/evaluate",
+                "/api/v1/sessions/10/submissions/files/300/grade",
                 headers={"Authorization": f"Bearer {instructor_token}"},
             )
             res2 = c.post(
-                "/api/v1/sessions/10/submissions/files/300/evaluate",
+                "/api/v1/sessions/10/submissions/files/300/grade",
                 headers={"Authorization": f"Bearer {instructor_token}"},
             )
 
@@ -670,7 +685,7 @@ class TestTempEvaluateEndpoint:
 
     def test_grade_report_shows_real_data_after_grading(self, client_with_data):
         """
-        After a successful evaluate call, GET /grades returns the real
+        After a successful /grade call, GET /grades returns the real
         score and feedback instead of an empty students list.
         Verifies the Phase 1 grade-report endpoint is fully wired.
         """
@@ -691,15 +706,15 @@ class TestTempEvaluateEndpoint:
         assert student_summary["combined_score"] is None
         assert student_summary["per_file"] == []
 
-        # Grade the submission
+        # Grade the submission by patching generate_feedback_and_persist
+        # (grade_single_submission_file calls it internally).
         with patch(
             "app.services.feedback.generate_feedback_and_persist",
-            return_value=_MOCK_PERSIST_RESULT,
         ) as mock_fn:
-            # Bypass the mock to actually call the real persist path
+            # Use the real persist path so a Grade row is actually written.
             mock_fn.side_effect = lambda db, sfid: _real_persist(db, sfid)
             c.post(
-                "/api/v1/sessions/10/submissions/files/300/evaluate",
+                "/api/v1/sessions/10/submissions/files/300/grade",
                 headers={"Authorization": f"Bearer {instructor_token}"},
             )
 

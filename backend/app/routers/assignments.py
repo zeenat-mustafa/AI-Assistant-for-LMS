@@ -278,13 +278,11 @@ def delete_assignment(
     db.commit()
 
 
-# ── Rubric Generation (TEMP) ──────────────────────────────────────────────────
+# ── Rubric Generation ────────────────────────────────────────────────────────
 
-# TEMP: for manual testing only — Sub-feature 2.8's pipeline will call this
-# automatically instead of exposing it directly.
 @router.post(
     "/{file_id}/generate-rubric",
-    summary="Generate rubric for an assignment file (instructor only) [TEMP]",
+    summary="Generate (or regenerate) the rubric for an assignment file (instructor only)",
 )
 def generate_rubric(
     session_id: int,

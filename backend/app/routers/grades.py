@@ -121,6 +121,23 @@ def session_grade_report(
     )
 
 
+# ── My grades (student) ───────────────────────────────────────────────────────
+
+@router.get(
+    "/mine",
+    response_model=GradeSummary,
+    summary="Get the current student's own grades for a session",
+)
+def my_grades(
+    session_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> GradeSummary:
+    _get_session_or_404(session_id, db)
+    submission = _load_submission_with_grades(session_id, current_user.id, db)
+    return _build_grade_summary(current_user, submission)
+
+
 # ── One student's grades (instructor) ────────────────────────────────────────
 
 @router.get(
@@ -143,20 +160,3 @@ def student_grade_summary(
         )
     submission = _load_submission_with_grades(session_id, student_id, db)
     return _build_grade_summary(student, submission)
-
-
-# ── My grades (student) ───────────────────────────────────────────────────────
-
-@router.get(
-    "/mine",
-    response_model=GradeSummary,
-    summary="Get the current student's own grades for a session",
-)
-def my_grades(
-    session_id: int,
-    db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
-) -> GradeSummary:
-    _get_session_or_404(session_id, db)
-    submission = _load_submission_with_grades(session_id, current_user.id, db)
-    return _build_grade_summary(current_user, submission)

@@ -35,8 +35,8 @@ Cases covered
    - Gemini API exception returns error without crashing.
    - Nonexistent submission file returns error without crashing.
 
-5. Temporary API Endpoint (POST /api/v1/sessions/{session_id}/submissions/files/{submission_file_id}/evaluate)
-   - Instructor can trigger evaluation.
+5. API Endpoint (POST /api/v1/sessions/{session_id}/submissions/files/{submission_file_id}/grade)
+   - Instructor can trigger grading.
    - Student receives 403 Forbidden.
    - Unauthenticated request receives 401 Unauthorized.
    - Non-existent submission file returns 404.
@@ -530,7 +530,7 @@ def test_evaluate_submission_file_unreadable_notebook(seeded_db):
 
 
 # ===========================================================================
-# 5. Temporary Test Endpoint (POST .../submissions/files/{id}/evaluate)
+# 5. Endpoint (POST .../submissions/files/{id}/grade)
 # ===========================================================================
 
 @pytest.fixture()
@@ -602,48 +602,45 @@ def client_with_data(db):
     app.dependency_overrides.clear()
 
 
-def test_temporary_evaluation_endpoint(client_with_data):
+def test_grade_submission_file_endpoint(client_with_data):
     client, instructor_token, student_token = client_with_data
 
     # 1. Unauthenticated request
     res_unauth = client.post(
-        "/api/v1/sessions/10/submissions/files/300/evaluate"
+        "/api/v1/sessions/10/submissions/files/300/grade"
     )
     assert res_unauth.status_code == 401
 
     # 2. Student cannot call this (instructor only)
     res_student = client.post(
-        "/api/v1/sessions/10/submissions/files/300/evaluate",
+        "/api/v1/sessions/10/submissions/files/300/grade",
         headers={"Authorization": f"Bearer {student_token}"},
     )
     assert res_student.status_code == 403
 
     # 3. Nonexistent file returns 404
     res_notfound = client.post(
-        "/api/v1/sessions/10/submissions/files/999/evaluate",
+        "/api/v1/sessions/10/submissions/files/999/grade",
         headers={"Authorization": f"Bearer {instructor_token}"},
     )
     assert res_notfound.status_code == 404
 
-    # 4. Instructor calls successfully — endpoint now calls generate_feedback_and_persist
-    # which returns {success, grade_id, score, feedback_text} (Sub-feature 5 shape).
-    mock_grade = {
+    # 4. Instructor calls successfully — endpoint calls grade_single_submission_file
+    # which returns {success, score, student_id, filename, submission_file_id}.
+    mock_result = {
+        "submission_file_id": 300,
+        "student_id": 2,
+        "filename": "hw1_sub.ipynb",
         "success": True,
-        "grade_id": 1,
         "score": 9.5,
-        "feedback_text": (
-            "Score: 9.5/10.\n"
-            "- Code Quality: 9.5/10.0 — Clean and well structured code."
-        ),
     }
-    with patch("app.services.feedback.generate_feedback_and_persist", return_value=mock_grade):
+    with patch("app.services.grading_pipeline.grade_single_submission_file", return_value=mock_result):
         res_instructor = client.post(
-            "/api/v1/sessions/10/submissions/files/300/evaluate",
+            "/api/v1/sessions/10/submissions/files/300/grade",
             headers={"Authorization": f"Bearer {instructor_token}"},
         )
         assert res_instructor.status_code == 200
         data = res_instructor.json()
         assert data["success"] is True
-        assert data["grade_id"] == 1
         assert data["score"] == 9.5
-        assert "Score: 9.5/10." in data["feedback_text"]
+        assert data["submission_file_id"] == 300

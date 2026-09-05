@@ -23,6 +23,9 @@ backend/test_data/
 calibrate_scores.py
 backend/calibrate_scores.py
 
+# ── Dev / debugging scripts (one-shot helpers, not production source) ─────────
+backend/dev_scripts/
+
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

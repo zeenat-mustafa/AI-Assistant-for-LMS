@@ -24,7 +24,7 @@ Cases covered
    g. Already-graded files (graded=True) are NOT included in the batch
    h. Event ordering: every "checking" is immediately followed by its "graded"/"failed"
 
-3. TEMP endpoint  POST /api/v1/sessions/{session_id}/grade-batch
+3. Endpoint  POST /api/v1/sessions/{session_id}/grade
    a. Unauthenticated → 401
    b. Student role → 403
    c. Non-existent session → 404
@@ -463,7 +463,7 @@ class TestGradeSessionBatch:
 
 
 # ===========================================================================
-# 3. TEMP endpoint  POST /api/v1/sessions/{session_id}/grade-batch
+# 3. Endpoint  POST /api/v1/sessions/{session_id}/grade
 # ===========================================================================
 
 @pytest.fixture()
@@ -515,10 +515,10 @@ def api_client(db):
     app.dependency_overrides.clear()
 
 
-_ENDPOINT = "/api/v1/sessions/{}/grade-batch"
+_ENDPOINT = "/api/v1/sessions/{}/grade"
 
 
-class TestGradeBatchEndpoint:
+class TestGradeSessionEndpoint:
 
     def test_unauthenticated_returns_401(self, api_client):
         c, *_ = api_client
