@@ -578,6 +578,77 @@ class TestMatchSubmissionFileToUnsolved:
         assert result["status"] == "ambiguous"
         assert result["matched_unsolved_file_id"] is None
 
+    # ── 26b-26d: code-comment-only candidate (empty requirements_text) ───────
+
+    def test_empty_requirements_text_candidate_matched_via_filename_fallback(self):
+        """
+        Bug fix: a candidate with empty requirements_text (code-comment-only
+        assignment, no markdown cells) must not be excluded from scoring.
+        With no content signal, it falls back to filename similarity alone.
+        Student kept the original filename (typical in-place edit), so the
+        filename-only score clears the 0.55 threshold easily.
+        """
+        candidates = [
+            {"id": 1, "filename": "hw1.ipynb", "requirements_text": ""},
+            {"id": 2, "filename": "hw2.ipynb", "requirements_text": (
+                "some unrelated dense markdown content about databases sql "
+                "joins indexes queries optimization transactions"
+            )},
+        ]
+        # Submission also has no markdown (matches the code-comment-only style).
+        result = match_submission_file_to_unsolved("", "hw1.ipynb", candidates)
+        assert result["status"] == "matched"
+        assert result["matched_unsolved_file_id"] == 1
+        assert result["confidence"] == pytest.approx(1.0)
+
+    def test_empty_requirements_text_candidate_with_none_value(self):
+        """Same as above but requirements_text is None rather than ''."""
+        candidates = [
+            {"id": 1, "filename": "hw1.ipynb", "requirements_text": None},
+            {"id": 2, "filename": "hw2.ipynb", "requirements_text": (
+                "some unrelated dense markdown content about databases sql "
+                "joins indexes queries optimization transactions"
+            )},
+        ]
+        result = match_submission_file_to_unsolved("", "hw1.ipynb", candidates)
+        assert result["status"] == "matched"
+        assert result["matched_unsolved_file_id"] == 1
+
+    def test_markdown_candidate_still_wins_on_content_despite_empty_sibling(self):
+        """
+        A code-comment-only candidate sitting in the pool must not disturb
+        correct content-based matching for a markdown-based sibling in the
+        same session -- unchanged public behaviour for files that already
+        have real requirements text.
+        """
+        markdown_requirements = (
+            "some unrelated dense markdown content about databases sql "
+            "joins indexes queries optimization transactions"
+        )
+        candidates = [
+            {"id": 1, "filename": "hw1.ipynb", "requirements_text": ""},
+            {"id": 2, "filename": "hw2.ipynb", "requirements_text": markdown_requirements},
+        ]
+        # Submission clearly mirrors hw2's markdown content and keeps its filename.
+        submitted_markdown = markdown_requirements + " plus my own analysis and notes"
+        result = match_submission_file_to_unsolved(submitted_markdown, "hw2.ipynb", candidates)
+        assert result["status"] == "matched"
+        assert result["matched_unsolved_file_id"] == 2
+
+    def test_all_candidates_empty_requirements_text_falls_back_to_filename_only(self):
+        """
+        If every candidate lacks requirements text, matching degrades
+        gracefully to filename-only comparison across the board rather than
+        raising or returning no_unsolved_files (candidates DO exist).
+        """
+        candidates = [
+            {"id": 1, "filename": "hw1.ipynb", "requirements_text": ""},
+            {"id": 2, "filename": "hw2.ipynb", "requirements_text": None},
+        ]
+        result = match_submission_file_to_unsolved("", "hw2.ipynb", candidates)
+        assert result["status"] == "matched"
+        assert result["matched_unsolved_file_id"] == 2
+
 
 # ===========================================================================
 # 27-32: match_all_files_in_submission (in-memory SQLite + real ORM models)
@@ -688,16 +759,19 @@ class TestMatchAllFilesInSubmission:
         assert r["matched_unsolved_file_id"] == uf_regression.id
         assert r["matched_unsolved_file_id"] != uf_nlp.id
 
-    # ── 29: no parsed text on any unsolved file ───────────────────────────────
+    # ── 29: single unsolved file with no parsed text (code-comment-only) ─────
 
-    def test_no_unsolved_files_with_text_returns_no_unsolved_files(self, db, tmp_path):
+    def test_single_unsolved_file_with_no_text_still_auto_matched(self, db, tmp_path):
         """
-        Session has an unsolved file but parsed_requirements_text is None
-        -> treated as if no candidates exist.
+        Bug fix: an unsolved file with parsed_requirements_text=None (e.g. a
+        code-comment-only assignment with zero markdown cells) must NOT be
+        silently dropped from the candidate pool. With only one unsolved file
+        in the session, the single-candidate shortcut still fires -- it is
+        auto-matched, not reported as "no_unsolved_files".
         """
         _seed_db(db, session_id=3, student_id=30)
-        _add_unsolved(db, session_id=3, filename="Assignment.ipynb",
-                      requirements_text=None)
+        uf = _add_unsolved(db, session_id=3, filename="Assignment.ipynb",
+                            requirements_text=None)
 
         nb_bytes = _make_notebook_bytes(markdown_cells=["## My work"])
         nb_rel = "3/submissions/30/work.ipynb"
@@ -716,8 +790,83 @@ class TestMatchAllFilesInSubmission:
             results = match_all_files_in_submission(db, sub.id)
 
         assert len(results) == 1
+        assert results[0]["status"] == "matched"
+        assert results[0]["matched_unsolved_file_id"] == uf.id
+        assert results[0]["confidence"] == pytest.approx(1.0)
+
+    def test_zero_unsolved_files_in_session_returns_no_unsolved_files(self, db, tmp_path):
+        """
+        The true "no_unsolved_files" case: the session has zero UnsolvedFile
+        rows at all (not merely one with empty text).
+        """
+        _seed_db(db, session_id=33, student_id=30)
+
+        nb_bytes = _make_notebook_bytes(markdown_cells=["## My work"])
+        nb_rel = "33/submissions/30/work.ipynb"
+        nb_abs = tmp_path / nb_rel
+        nb_abs.parent.mkdir(parents=True, exist_ok=True)
+        nb_abs.write_bytes(nb_bytes)
+
+        sub, sf = _add_submission_with_file(
+            db, session_id=33, student_id=30,
+            submission_filename="work.ipynb",
+            extracted_path=nb_rel,
+        )
+        db.commit()
+
+        with patch("app.services.storage.absolute_path", lambda rel: tmp_path / rel):
+            results = match_all_files_in_submission(db, sub.id)
+
+        assert len(results) == 1
         assert results[0]["status"] == "no_unsolved_files"
         assert results[0]["matched_unsolved_file_id"] is None
+
+    # ── 29b: code-comment-only candidate alongside a markdown-based one ──────
+
+    def test_code_comment_only_candidate_not_excluded_when_mixed_with_markdown(self, db, tmp_path):
+        """
+        Session has TWO unsolved files: one code-comment-only (no markdown,
+        parsed_requirements_text="") and one markdown-based. A submission
+        whose filename matches the code-comment-only assignment (and whose
+        content has no markdown either, as expected for that assignment
+        style) must be matched to it via the filename-only fallback -- not
+        silently excluded, and not force-matched to the unrelated markdown
+        assignment via a shrunken candidate pool.
+        """
+        _seed_db(db, session_id=34, student_id=30)
+        uf_code_only = _add_unsolved(
+            db, session_id=34, filename="hw1.ipynb", requirements_text="",
+        )
+        uf_markdown = _add_unsolved(
+            db, session_id=34, filename="hw2.ipynb",
+            requirements_text=(
+                "Build a REST API with Flask covering routing, request "
+                "validation, JSON serialization, and error handling middleware"
+            ),
+        )
+
+        # Student edited the code-comment-only notebook in place -- same
+        # filename preserved, no markdown cells (matches the assignment style).
+        nb_bytes = _make_notebook_bytes(code_cells=["# answer here\nx = 1 + 1\nprint(x)"])
+        nb_rel = "34/submissions/30/hw1.ipynb"
+        nb_abs = tmp_path / nb_rel
+        nb_abs.parent.mkdir(parents=True, exist_ok=True)
+        nb_abs.write_bytes(nb_bytes)
+
+        sub, sf = _add_submission_with_file(
+            db, session_id=34, student_id=30,
+            submission_filename="hw1.ipynb",
+            extracted_path=nb_rel,
+        )
+        db.commit()
+
+        with patch("app.services.storage.absolute_path", lambda rel: tmp_path / rel):
+            results = match_all_files_in_submission(db, sub.id)
+
+        assert len(results) == 1
+        assert results[0]["status"] == "matched"
+        assert results[0]["matched_unsolved_file_id"] == uf_code_only.id
+        assert results[0]["matched_unsolved_file_id"] != uf_markdown.id
 
     # ── 30: multiple submission files -> each matched to correct unsolved ──────
 

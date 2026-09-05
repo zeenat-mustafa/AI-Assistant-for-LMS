@@ -34,10 +34,15 @@ class Settings(BaseSettings):
 
     # ── LLM: Groq (fallback on Gemini quota/rate-limit errors) ───────────────
     groq_api_key: str = ""
-    # Comparable fast open model on Groq (Llama 3.1 8B is currently available and fast).
-    groq_fast_model: str = "llama-3.1-8b-instant"
+    # llama-3.1-8b-instant / llama-3.3-70b-versatile were deprecated by Groq in
+    # June 2026; these are the current equivalents.
+    groq_fast_model: str = "openai/gpt-oss-20b"
     # Stronger Groq model for reasoning fallback.
-    groq_pro_model: str = "llama-3.3-70b-versatile"
+    groq_pro_model: str = "openai/gpt-oss-120b"
+
+    # ── LLM: Ollama (fallback if both Gemini and Groq fail) ──────────────────
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.1:8b"
 
     # ── Demo seed users (MVP only — not for production) ───────────────────────
     demo_instructor_email: str = "instructor@demo.com"

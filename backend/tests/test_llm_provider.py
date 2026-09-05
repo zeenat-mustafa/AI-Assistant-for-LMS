@@ -26,19 +26,23 @@ Cases covered
    - Groq is never called.
    - Original exception is re-raised (not wrapped in LLMProviderError).
 
-5. call_llm — both Gemini and Groq fail
-   - LLMProviderError is raised.
-   - Both error descriptions appear in the exception message.
+5. call_llm — Gemini quota error → Groq fails (any reason) → Ollama succeeds
+   - Ollama is called and its result is returned.
+   - Logs INFO with "ollama" in the message.
 
-6. call_llm — model selection
+6. call_llm — Gemini, Groq, and Ollama all fail
+   - LLMProviderError is raised.
+   - All three error descriptions appear in the exception message.
+
+7. call_llm — model selection
    - purpose="fast" selects GEMINI_FAST_MODEL / GROQ_FAST_MODEL.
    - purpose="pro" selects GEMINI_PRO_MODEL / GROQ_PRO_MODEL.
 
-7. Integration: rubric.py end-to-end via mocked call_llm
+8. Integration: rubric.py end-to-end via mocked call_llm
    - call_gemini_for_rubric returns the response text when call_llm succeeds.
    - call_gemini_for_rubric raises RubricGenerationError when call_llm raises.
 
-8. Integration: evaluator.py end-to-end via mocked call_llm
+9. Integration: evaluator.py end-to-end via mocked call_llm
    - call_gemini_for_evaluation returns the response text when call_llm succeeds.
    - call_gemini_for_evaluation raises EvaluationError when call_llm raises.
 """
@@ -206,44 +210,97 @@ class TestCallLlmGeminiNonQuotaError:
 
 
 # ===========================================================================
-# 5. call_llm — both Gemini and Groq fail
+# 5. call_llm — Gemini quota error, Groq fails (any reason) → Ollama succeeds
 # ===========================================================================
 
-class TestCallLlmBothProvidersFail:
-    def test_raises_llm_provider_error(self, monkeypatch):
+class TestCallLlmGroqFailsOllamaFallback:
+    def test_returns_ollama_result_on_groq_failure(self, monkeypatch):
         monkeypatch.setattr("app.services.llm_provider.settings.gemini_fast_model", "gemini-fast")
         monkeypatch.setattr("app.services.llm_provider.settings.groq_fast_model", "groq-fast")
-        quota_exc = google.api_core.exceptions.ResourceExhausted("gemini quota")
-        groq_exc = RuntimeError("groq service down")
+        quota_exc = google.api_core.exceptions.ResourceExhausted("quota")
+        groq_exc = RuntimeError("groq service down")  # non-quota Groq failure — still falls through
         with patch("app.services.llm_provider._call_gemini", side_effect=quota_exc), \
-             patch("app.services.llm_provider._call_groq", side_effect=groq_exc):
-            with pytest.raises(LLMProviderError) as exc_info:
-                call_llm("prompt", purpose="fast")
-        message = str(exc_info.value)
-        assert "gemini quota" in message
-        assert "groq service down" in message
+             patch("app.services.llm_provider._call_groq", side_effect=groq_exc), \
+             patch("app.services.llm_provider._call_ollama", return_value="ollama output") as mock_ollama:
+            result = call_llm("my prompt", purpose="fast")
+        assert result == "ollama output"
+        mock_ollama.assert_called_once_with("my prompt")
 
-    def test_error_message_contains_both_failure_reasons(self, monkeypatch):
+    def test_logs_info_ollama_fallback(self, monkeypatch, caplog):
         monkeypatch.setattr("app.services.llm_provider.settings.gemini_fast_model", "gemini-fast")
         monkeypatch.setattr("app.services.llm_provider.settings.groq_fast_model", "groq-fast")
-        quota_exc = RuntimeError("rate limit exceeded on gemini")
-        groq_exc = ConnectionError("groq timed out")
+        monkeypatch.setattr("app.services.llm_provider.settings.ollama_model", "llama3.1:8b")
+        quota_exc = google.api_core.exceptions.ResourceExhausted("quota")
+        groq_exc = RuntimeError("groq down")
         with patch("app.services.llm_provider._call_gemini", side_effect=quota_exc), \
-             patch("app.services.llm_provider._call_groq", side_effect=groq_exc):
-            with pytest.raises(LLMProviderError) as exc_info:
+             patch("app.services.llm_provider._call_groq", side_effect=groq_exc), \
+             patch("app.services.llm_provider._call_ollama", return_value="ok"):
+            with caplog.at_level(logging.INFO, logger="app.services.llm_provider"):
                 call_llm("prompt", purpose="fast")
-        msg = str(exc_info.value)
-        assert "rate limit exceeded on gemini" in msg
-        assert "groq timed out" in msg
-        assert "purpose=fast" in msg
+        info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        assert any("ollama" in m.lower() and "fallback" in m.lower() for m in info_messages)
 
-    def test_logs_error_on_both_fail(self, monkeypatch, caplog):
+    def test_logs_warning_on_groq_failure(self, monkeypatch, caplog):
         monkeypatch.setattr("app.services.llm_provider.settings.gemini_fast_model", "gemini-fast")
         monkeypatch.setattr("app.services.llm_provider.settings.groq_fast_model", "groq-fast")
         quota_exc = google.api_core.exceptions.ResourceExhausted("quota")
         groq_exc = RuntimeError("groq down")
         with patch("app.services.llm_provider._call_gemini", side_effect=quota_exc), \
-             patch("app.services.llm_provider._call_groq", side_effect=groq_exc):
+             patch("app.services.llm_provider._call_groq", side_effect=groq_exc), \
+             patch("app.services.llm_provider._call_ollama", return_value="ok"):
+            with caplog.at_level(logging.WARNING, logger="app.services.llm_provider"):
+                call_llm("prompt", purpose="fast")
+        warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("ollama" in m.lower() for m in warning_messages)
+
+
+# ===========================================================================
+# 6. call_llm — Gemini, Groq, and Ollama all fail
+# ===========================================================================
+
+class TestCallLlmAllProvidersFail:
+    def test_raises_llm_provider_error(self, monkeypatch):
+        monkeypatch.setattr("app.services.llm_provider.settings.gemini_fast_model", "gemini-fast")
+        monkeypatch.setattr("app.services.llm_provider.settings.groq_fast_model", "groq-fast")
+        quota_exc = google.api_core.exceptions.ResourceExhausted("gemini quota")
+        groq_exc = RuntimeError("groq service down")
+        ollama_exc = LLMProviderError("Ollama call failed: connection refused")
+        with patch("app.services.llm_provider._call_gemini", side_effect=quota_exc), \
+             patch("app.services.llm_provider._call_groq", side_effect=groq_exc), \
+             patch("app.services.llm_provider._call_ollama", side_effect=ollama_exc):
+            with pytest.raises(LLMProviderError) as exc_info:
+                call_llm("prompt", purpose="fast")
+        message = str(exc_info.value)
+        assert "gemini quota" in message
+        assert "groq service down" in message
+        assert "connection refused" in message
+
+    def test_error_message_contains_all_three_failure_reasons(self, monkeypatch):
+        monkeypatch.setattr("app.services.llm_provider.settings.gemini_fast_model", "gemini-fast")
+        monkeypatch.setattr("app.services.llm_provider.settings.groq_fast_model", "groq-fast")
+        quota_exc = RuntimeError("rate limit exceeded on gemini")
+        groq_exc = ConnectionError("groq timed out")
+        ollama_exc = LLMProviderError("Ollama call failed: connection refused")
+        with patch("app.services.llm_provider._call_gemini", side_effect=quota_exc), \
+             patch("app.services.llm_provider._call_groq", side_effect=groq_exc), \
+             patch("app.services.llm_provider._call_ollama", side_effect=ollama_exc):
+            with pytest.raises(LLMProviderError) as exc_info:
+                call_llm("prompt", purpose="fast")
+        msg = str(exc_info.value)
+        assert "rate limit exceeded on gemini" in msg
+        assert "groq timed out" in msg
+        assert "connection refused" in msg
+        assert "purpose=fast" in msg
+
+    def test_logs_error_on_all_three_fail(self, monkeypatch, caplog):
+        monkeypatch.setattr("app.services.llm_provider.settings.gemini_fast_model", "gemini-fast")
+        monkeypatch.setattr("app.services.llm_provider.settings.groq_fast_model", "groq-fast")
+        quota_exc = google.api_core.exceptions.ResourceExhausted("quota")
+        groq_exc = RuntimeError("groq down")
+        ollama_exc = LLMProviderError("Ollama call failed: connection refused")
+        with patch("app.services.llm_provider._call_gemini", side_effect=quota_exc), \
+             patch("app.services.llm_provider._call_groq", side_effect=groq_exc), \
+             patch("app.services.llm_provider._call_ollama", side_effect=ollama_exc):
             with caplog.at_level(logging.ERROR, logger="app.services.llm_provider"):
                 with pytest.raises(LLMProviderError):
                     call_llm("prompt", purpose="fast")
@@ -251,7 +308,7 @@ class TestCallLlmBothProvidersFail:
 
 
 # ===========================================================================
-# 6. call_llm — model selection (fast vs pro)
+# 7. call_llm — model selection (fast vs pro)
 # ===========================================================================
 
 class TestCallLlmModelSelection:
@@ -281,7 +338,7 @@ class TestCallLlmModelSelection:
 
 
 # ===========================================================================
-# 7. Integration — rubric.py end-to-end through llm_provider
+# 8. Integration — rubric.py end-to-end through llm_provider
 # ===========================================================================
 
 class TestRubricIntegration:
@@ -312,7 +369,7 @@ class TestRubricIntegration:
 
 
 # ===========================================================================
-# 8. Integration — evaluator.py end-to-end through llm_provider
+# 9. Integration — evaluator.py end-to-end through llm_provider
 # ===========================================================================
 
 class TestEvaluatorIntegration:
