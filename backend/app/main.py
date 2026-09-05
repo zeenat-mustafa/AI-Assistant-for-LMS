@@ -38,6 +38,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup ───────────────────────────────────────────────────────────────
+    # create_all() only ever matters for a brand-new, empty database (fresh
+    # local setup convenience) -- it CANNOT alter tables that already exist.
+    # Any schema change to an existing DB must go through an Alembic
+    # migration (see README.md "Database Migrations"); never rely on this
+    # call to apply it.
     logger.info("Creating database tables…")
     from app.database import Base
     Base.metadata.create_all(bind=engine)
