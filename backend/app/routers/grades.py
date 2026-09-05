@@ -40,14 +40,25 @@ def _get_session_or_404(session_id: int, db: Session) -> LMSSession:
     return s
 
 
+def _get_total_assignment_count(session_id: int, db: Session) -> int:
+    return db.query(UnsolvedFile).filter(UnsolvedFile.session_id == session_id).count()
+
+
 def _build_grade_summary(
     student: User,
     submission: Submission | None,
+    total_assignment_files: int,
 ) -> GradeSummary:
     """
     Build a GradeSummary for one student.
-    combined_score = average of per-file scores (each out of 10), normalised to 0–10.
-    If no graded files exist, combined_score is None.
+
+    combined_score = sum of per-file scores (each out of 10) divided by the
+    session's total assignment file count — NOT by how many files this
+    student happened to submit/match. A student missing a submission (or
+    with a submission that didn't match any assignment) is scored as 0 for
+    that file, so combined_score fairly reflects work not done rather than
+    being averaged away.
+    If there are no assignment files in the session, combined_score is None.
     """
     per_file: list[GradeRead] = []
 
@@ -57,8 +68,8 @@ def _build_grade_summary(
                 per_file.append(GradeRead.from_orm_model(sf.grade, sf))
 
     combined: float | None = None
-    if per_file:
-        combined = sum(g.score for g in per_file) / len(per_file)
+    if total_assignment_files > 0:
+        combined = sum(g.score for g in per_file) / total_assignment_files
         combined = round(combined, 2)
 
     return GradeSummary(
@@ -98,6 +109,7 @@ def session_grade_report(
     _instructor: Annotated[User, Depends(require_instructor)],
 ) -> SessionGradeReport:
     lms_session = _get_session_or_404(session_id, db)
+    total_assignment_files = _get_total_assignment_count(session_id, db)
 
     # Find every student who has a submission for this session.
     submissions = (
@@ -111,7 +123,7 @@ def session_grade_report(
     )
 
     summaries = [
-        _build_grade_summary(sub.student, sub) for sub in submissions
+        _build_grade_summary(sub.student, sub, total_assignment_files) for sub in submissions
     ]
 
     return SessionGradeReport(
@@ -134,8 +146,9 @@ def my_grades(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> GradeSummary:
     _get_session_or_404(session_id, db)
+    total_assignment_files = _get_total_assignment_count(session_id, db)
     submission = _load_submission_with_grades(session_id, current_user.id, db)
-    return _build_grade_summary(current_user, submission)
+    return _build_grade_summary(current_user, submission, total_assignment_files)
 
 
 # ── One student's grades (instructor) ────────────────────────────────────────
@@ -158,5 +171,6 @@ def student_grade_summary(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Student {student_id} not found.",
         )
+    total_assignment_files = _get_total_assignment_count(session_id, db)
     submission = _load_submission_with_grades(session_id, student_id, db)
-    return _build_grade_summary(student, submission)
+    return _build_grade_summary(student, submission, total_assignment_files)
