@@ -2,14 +2,16 @@
 
 An instructor-directed AI grading assistant for Jupyter notebook assignments, built as a capstone project for the Purelogics Bootcamp.
 
-Instructors create a **Session** for a given day (e.g. "Week 8 Day 4") and upload the unsolved assignment. Students download it, solve it, and submit their work back to the same session. When an instructor is ready, they trigger grading with a plain-English chat instruction — the system locates the right submissions, matches each one to the correct assignment, generates its own grading rubric, evaluates the work, and writes specific, individualized feedback. No manual grading, no instructor-authored rubric.
+Instructors create a **Session** for a given class day (e.g. "Week 8 Day 4") and upload the assignment notebook. Students download it, complete their work, and submit it back to the same session. When ready, an instructor triggers grading with a single request — the system locates the relevant submissions, matches each one to its assignment, generates a tailored grading rubric, evaluates the work against it, and produces specific, individualized feedback for every student.
 
 ## How Grading Works
 
-- **No pre-written rubric.** The AI reads each unsolved assignment's own instructions and generates its own grading criteria (out of 10 marks), once per assignment, reused consistently for every student.
-- **Content-based matching, not filename matching.** Students typically edit the original notebook in place rather than starting fresh, so their submission still carries the original instructions. The system matches submissions to assignments by comparing that retained content — filename is only a fast first check.
-- **Structurally separated files.** Every session has three distinct areas — assignment files, student submissions, and grades/feedback — so a file's role is never guessed from its name.
-- **Resilient by design.** LLM calls run through a shared provider layer: Gemini is primary, with automatic fallback to Groq if a quota or rate-limit error occurs, so a single provider hiccup doesn't stop a whole grading run.
+- **Dynamic, assignment-specific rubrics.** For each assignment, the system reads its instructions and structure to generate a grading rubric out of 10 points, tailored to that specific task. The rubric is generated once and reused consistently across every student's submission, ensuring fair and uniform grading.
+- **Rubrics weighted toward genuine student work.** The system distinguishes instructor-provided starter code from sections requiring student completion, and allocates the majority of the available points to the latter — recognizing correct student-authored logic, completed exercises, and answered questions, wherever they appear in the notebook.
+- **Context-aware submission matching.** Each submitted notebook is matched to its corresponding assignment by comparing the substance of the work — the retained instructions and structure a student's edits preserve — giving reliable matching even across multiple assignments in the same session.
+- **Consistent, granular scoring.** All scores are expressed in clean 0.5-point increments, both at the rubric level and in final grades, for clarity and consistency across a class.
+- **Specific, criterion-level feedback.** Every grade includes a breakdown by rubric criterion — what was awarded, what was possible, and why — giving students clear, actionable feedback rather than a single opaque number.
+- **Resilient grading pipeline.** AI requests are served through a dual-provider system (Gemini primary, Groq as an automatic backup), and batch grading runs report progress per student and continue through the full class list even if an individual submission needs attention — keeping instructors informed without interrupting the run.
 
 ## Tech Stack
 
@@ -17,14 +19,14 @@ Instructors create a **Session** for a given day (e.g. "Week 8 Day 4") and uploa
 |---|---|
 | Backend API | Python 3.13 + FastAPI |
 | Database | SQLite (SQLAlchemy ORM) |
-| File storage | Local filesystem, structured per-session (swappable abstraction) |
+| File storage | Local filesystem, structured per-session |
 | Auth | JWT (bcrypt password hashing) |
-| LLM — primary | Gemini API (`gemini-flash-latest` / `gemini-3.1-pro-preview`) |
-| LLM — fallback | Groq API (automatic fallback on Gemini quota errors) |
+| AI — primary | Gemini API (`gemini-flash-latest` / `gemini-3.1-pro-preview`) |
+| AI — backup | Groq API |
 | Notebook parsing | `nbformat`, recursive `.zip` extraction |
 | Session matching | Fuzzy text matching |
 | MCP server | Python MCP SDK |
-| Frontend | Next.js *(Phase 5 — not yet built)* |
+| Frontend | Next.js *(in development)* |
 
 ## Getting Started
 
@@ -56,18 +58,18 @@ On first run, the server creates the SQLite database and seeds two demo accounts
 | Instructor | `instructor@demo.com` | `instructor123` |
 | Student | `student@demo.com` | `student123` |
 
-These are seeded automatically for local development only. Replace `SECRET_KEY` with a real random value before any shared or hosted deployment.
+These are seeded automatically for local development. Replace `SECRET_KEY` with a securely generated value before any shared or hosted deployment.
 
 ## Project Status
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | Auth, Session CRUD, assignment upload/download, submission upload, database schema | ✅ Complete |
-| 2 | AI grading pipeline — notebook parsing, file matching, rubric generation, evaluation, feedback + rationale, Gemini/Groq fallback layer | 🔄 In progress |
-| 3 | Instructor chatbot — natural-language instruction → session matching → live-updating grading run | ⏳ Upcoming |
-| 4 | MCP server — chatbot and grading agent exposed as standardized callable tools | ⏳ Upcoming |
-| 5 | Minimal Next.js dashboard for both roles | ⏳ Upcoming |
-| 6 | Integration testing, polish, live demo prep | ⏳ Upcoming |
+| 1 | Authentication, session management, assignment/submission upload and download, database schema | ✅ Complete |
+| 2 | AI grading pipeline — notebook parsing, submission matching, rubric generation, evaluation, feedback, dual-provider AI layer, batch grading | ✅ Complete |
+| 3 | Instructor chatbot — natural-language session resolution and live-updating grading runs | ⏳ Upcoming |
+| 4 | MCP server — grading pipeline exposed as standardized callable tools | ⏳ Upcoming |
+| 5 | Web dashboard for instructors and students | ⏳ Upcoming |
+| 6 | Integration testing, polish, and demo preparation | ⏳ Upcoming |
 
 ## Contributors
 
