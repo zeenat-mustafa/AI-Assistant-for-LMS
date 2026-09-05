@@ -204,38 +204,25 @@ def test_build_evaluation_prompt():
 
 
 # ===========================================================================
-# 2. Gemini Calling
+# 2. LLM Calling (now delegates to llm_provider.call_llm)
 # ===========================================================================
 
-def test_call_gemini_missing_api_key():
-    with patch("app.services.evaluator.settings.gemini_api_key", ""):
-        with pytest.raises(EvaluationError, match="Gemini API key is not configured"):
-            call_gemini_for_evaluation("Prompt")
-
-
 def test_call_gemini_success():
-    mock_resp = MagicMock()
-    mock_resp.text = '{"criteria": []}'
-
-    with patch("app.services.evaluator.settings.gemini_api_key", "fake-key"):
-        with patch("google.generativeai.GenerativeModel") as mock_model_cls:
-            mock_model = MagicMock()
-            mock_model.generate_content.return_value = mock_resp
-            mock_model_cls.return_value = mock_model
-
-            result = call_gemini_for_evaluation("Prompt")
-            assert result == '{"criteria": []}'
+    # call_gemini_for_evaluation delegates to llm_provider.call_llm; patch there.
+    with patch("app.services.llm_provider.call_llm", return_value='{"criteria": []}') as mock_llm:
+        result = call_gemini_for_evaluation("Prompt")
+        assert result == '{"criteria": []}'
+        mock_llm.assert_called_once_with("Prompt", purpose="fast")
 
 
 def test_call_gemini_failure_raises_evaluation_error():
-    with patch("app.services.evaluator.settings.gemini_api_key", "fake-key"):
-        with patch("google.generativeai.GenerativeModel") as mock_model_cls:
-            mock_model = MagicMock()
-            mock_model.generate_content.side_effect = RuntimeError("Service Unavailable")
-            mock_model_cls.return_value = mock_model
-
-            with pytest.raises(EvaluationError, match="Gemini call failed"):
-                call_gemini_for_evaluation("Prompt")
+    # A non-quota exception from call_llm should be wrapped in EvaluationError.
+    with patch(
+        "app.services.llm_provider.call_llm",
+        side_effect=RuntimeError("Service Unavailable"),
+    ):
+        with pytest.raises(EvaluationError, match="LLM call failed"):
+            call_gemini_for_evaluation("Prompt")
 
 
 # ===========================================================================

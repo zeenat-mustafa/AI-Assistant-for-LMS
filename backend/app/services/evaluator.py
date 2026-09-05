@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models.submission_file import SubmissionFile
 from app.models.unsolved_file import UnsolvedFile
+from app.services import llm_provider
 from app.services.notebook import extract_notebook_structure, parse_notebook_file
 from app.services.rubric import generate_rubric_for_unsolved_file
 from app.services.storage import absolute_path
@@ -101,22 +102,18 @@ def _format_cells_for_evaluation(cells: list[dict[str, Any]]) -> str:
 
 def call_gemini_for_evaluation(prompt: str) -> str:
     """
-    Call Gemini using GEMINI_API_KEY and GEMINI_FAST_MODEL from settings.
+    Send *prompt* to the LLM provider (Gemini, with automatic Groq fallback on
+    quota/rate-limit errors) and return the raw response text.
     Raises EvaluationError on failure — never crashes caller.
     """
-    if not settings.gemini_api_key:
-        raise EvaluationError("Gemini API key is not configured in settings.")
-
     try:
-        genai.configure(api_key=settings.gemini_api_key)
-        model = genai.GenerativeModel(settings.gemini_fast_model)
-        response = model.generate_content(prompt)
-        if not response or not response.text:
-            raise EvaluationError("Gemini returned an empty response.")
-        return response.text
+        return llm_provider.call_llm(prompt, purpose="fast")
+    except llm_provider.LLMProviderError as exc:
+        logger.warning("LLM submission evaluation call failed (both providers): %s", exc)
+        raise EvaluationError(f"LLM call failed: {exc}") from exc
     except Exception as exc:
-        logger.warning("Gemini submission evaluation call failed: %s", exc)
-        raise EvaluationError(f"Gemini call failed: {exc}") from exc
+        logger.warning("LLM submission evaluation call failed: %s", exc)
+        raise EvaluationError(f"LLM call failed: {exc}") from exc
 
 
 def parse_evaluation_response(raw_text: str, rubric: dict[str, Any]) -> dict[str, Any]:

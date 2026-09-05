@@ -263,45 +263,26 @@ def test_parse_rubric_response_invalid_structure():
 
 
 # ===========================================================================
-# 3. Gemini invocation wrapper
+# 3. LLM invocation wrapper (now delegates to llm_provider.call_llm)
 # ===========================================================================
 
-def test_call_gemini_missing_api_key(monkeypatch):
-    from app.config import settings
-    monkeypatch.setattr(settings, "gemini_api_key", "")
-    with pytest.raises(RubricGenerationError) as exc_info:
-        call_gemini_for_rubric("prompt")
-    assert "not configured" in str(exc_info.value)
+def test_call_gemini_success(monkeypatch):
+    # call_gemini_for_rubric now delegates to llm_provider.call_llm; patch there.
+    with patch("app.services.llm_provider.call_llm", return_value='{"criteria": []}') as mock_llm:
+        result = call_gemini_for_rubric("test prompt")
+        assert result == '{"criteria": []}'
+        mock_llm.assert_called_once_with("test prompt", purpose="fast")
 
 
-@patch("google.generativeai.GenerativeModel")
-@patch("google.generativeai.configure")
-def test_call_gemini_success(mock_configure, mock_model_cls, monkeypatch):
-    from app.config import settings
-    monkeypatch.setattr(settings, "gemini_api_key", "test-key")
-
-    mock_instance = MagicMock()
-    mock_instance.generate_content.return_value = MagicMock(text='{"criteria": []}')
-    mock_model_cls.return_value = mock_instance
-
-    result = call_gemini_for_rubric("test prompt")
-    assert result == '{"criteria": []}'
-    mock_configure.assert_called_once_with(api_key="test-key")
-
-
-@patch("google.generativeai.GenerativeModel")
-@patch("google.generativeai.configure")
-def test_call_gemini_failure_raises_rubric_error(mock_configure, mock_model_cls, monkeypatch):
-    from app.config import settings
-    monkeypatch.setattr(settings, "gemini_api_key", "test-key")
-
-    mock_instance = MagicMock()
-    mock_instance.generate_content.side_effect = RuntimeError("Quota exceeded")
-    mock_model_cls.return_value = mock_instance
-
-    with pytest.raises(RubricGenerationError) as exc_info:
-        call_gemini_for_rubric("test prompt")
-    assert "Quota exceeded" in str(exc_info.value)
+def test_call_gemini_failure_raises_rubric_error(monkeypatch):
+    # A non-quota exception from call_llm should be wrapped in RubricGenerationError.
+    with patch(
+        "app.services.llm_provider.call_llm",
+        side_effect=RuntimeError("Quota exceeded"),
+    ):
+        with pytest.raises(RubricGenerationError) as exc_info:
+            call_gemini_for_rubric("test prompt")
+        assert "Quota exceeded" in str(exc_info.value)
 
 
 # ===========================================================================

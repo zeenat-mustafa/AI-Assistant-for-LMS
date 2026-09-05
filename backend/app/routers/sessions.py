@@ -1,10 +1,11 @@
 """
 Session CRUD — instructor only for create/delete, all authenticated users for read.
 
-POST   /sessions                 → create a new session
-GET    /sessions                 → list all sessions (paginated)
-GET    /sessions/{session_id}    → get one session with its assignment files
-DELETE /sessions/{session_id}    → delete session + all stored files (instructor only)
+POST   /sessions                              → create a new session
+GET    /sessions                              → list all sessions (paginated)
+GET    /sessions/{session_id}                 → get one session with its assignment files
+DELETE /sessions/{session_id}                 → delete session + all stored files (instructor only)
+POST   /sessions/{session_id}/grade-batch     → TEMP: eagerly drain grading generator (instructor only)
 """
 
 from typing import Annotated
@@ -123,3 +124,53 @@ def delete_session(
     db.delete(session)
     db.commit()
     delete_session_storage(session_id)
+
+
+# TEMP — Phase 3 will replace this with a proper SSE/streaming endpoint triggered
+# by the chatbot.  Sub-feature 8 may also expose a cleaner non-temp version.
+@router.post(
+    "/{session_id}/grade-batch",
+    summary="[TEMP] Grade all ungraded submissions in a session (instructor only)",
+    response_model=None,
+    status_code=status.HTTP_200_OK,
+)
+def grade_batch(
+    session_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _instructor: Annotated[User, Depends(require_instructor)],
+) -> dict:
+    """
+    Eagerly drains the ``grade_session_batch`` generator and returns every
+    event plus the final summary in a single JSON response.
+
+    This is intentionally synchronous and blocking — it is a temporary
+    diagnostic endpoint so instructors can trigger a full batch grade and
+    inspect results via Swagger.  Phase 3 will replace it with a streaming
+    SSE response that consumes the same generator incrementally.
+
+    Response shape::
+
+        {
+            "events": [
+                {"event": "checking",  "student_id": 2, "filename": "hw1.ipynb"},
+                {"event": "graded",    "student_id": 2, "filename": "hw1.ipynb", "score": 8.5},
+                {"event": "failed",    "student_id": 3, "filename": "bad.ipynb",  "error": "..."},
+                ...
+                {"event": "summary",   "total": 3, "graded": 2, "failed": 1,
+                 "failures": [{"student_id": 3, "filename": "bad.ipynb", "error": "..."}]}
+            ],
+            "summary": {"event": "summary", "total": 3, "graded": 2, "failed": 1, "failures": [...]}
+        }
+    """
+    from app.services.grading_pipeline import grade_session_batch
+
+    _get_session_or_404(session_id, db)
+
+    events: list[dict] = list(grade_session_batch(db, session_id))
+
+    # The summary is always the last event yielded by the generator.
+    summary = events[-1] if events else {
+        "event": "summary", "total": 0, "graded": 0, "failed": 0, "failures": [],
+    }
+
+    return {"events": events, "summary": summary}
