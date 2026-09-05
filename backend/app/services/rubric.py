@@ -226,6 +226,15 @@ def generate_rubric_for_unsolved_file(
     6. On success, save rubric to rubric_json, set rubric_generated=True, commit,
        and return {"success": True, "rubric": {...}}.
     7. Never crashes the caller.
+
+    Staleness visibility (force=True only): regenerating a rubric never touches
+    existing Grade rows for submissions already graded against the previous
+    version — those Grade.rationale_json entries keep referencing criteria that
+    may no longer exist in the new rubric. No auto re-grade, no DB change; this
+    just surfaces a count so the instructor knows. If force=True and at least
+    one Grade already exists for a SubmissionFile matched to this UnsolvedFile,
+    the returned dict includes a "warning" key; it is omitted entirely (not
+    just empty) when force=False or when no such grades exist yet.
     """
     try:
         unsolved = db.get(UnsolvedFile, unsolved_file_id)
@@ -251,6 +260,20 @@ def generate_rubric_for_unsolved_file(
                     unsolved_file_id,
                     exc,
                 )
+
+        # Count grades that will go stale if we proceed to regenerate (force
+        # path only -- the cache-hit return above already exited for a
+        # non-force call against an existing rubric).
+        stale_grade_count = 0
+        if force:
+            from app.models.grade import Grade
+            from app.models.submission_file import SubmissionFile
+            stale_grade_count = (
+                db.query(Grade)
+                .join(SubmissionFile, Grade.submission_file_id == SubmissionFile.id)
+                .filter(SubmissionFile.matched_unsolved_file_id == unsolved_file_id)
+                .count()
+            )
 
         structure = extract_notebook_structure(str(absolute_path(unsolved.file_path)))
         if not structure["valid"]:
@@ -302,7 +325,13 @@ def generate_rubric_for_unsolved_file(
         db.refresh(unsolved)
 
         logger.info("Successfully generated and saved rubric for unsolved_file %d", unsolved_file_id)
-        return {"success": True, "rubric": rubric_data}
+        result: dict[str, Any] = {"success": True, "rubric": rubric_data}
+        if stale_grade_count > 0:
+            result["warning"] = (
+                f"{stale_grade_count} existing grade(s) reference the previous "
+                f"rubric version and are now stale."
+            )
+        return result
 
     except Exception as exc:
         logger.error(

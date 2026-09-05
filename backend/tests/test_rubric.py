@@ -349,6 +349,95 @@ def test_force_regeneration_overwrites_cached_rubric(mock_gemini, seeded_db):
     assert mock_gemini.call_count == 1
 
 
+def _add_graded_submission_file(db, *, unsolved_file_id: int, submission_id: int) -> None:
+    """Create one SubmissionFile matched to unsolved_file_id, plus its Grade row."""
+    from app.models.grade import Grade
+    from app.models.submission import Submission
+    from app.models.submission_file import SubmissionFile
+
+    if db.get(Submission, submission_id) is None:
+        db.add(Submission(
+            id=submission_id, session_id=10, student_id=2,
+            original_filename="sub.ipynb", uploaded_file_path=f"10/submissions/2/sub{submission_id}.ipynb",
+        ))
+        db.flush()
+    sf = SubmissionFile(
+        submission_id=submission_id,
+        matched_unsolved_file_id=unsolved_file_id,
+        original_filename="sub.ipynb",
+        extracted_ipynb_path=f"10/submissions/2/sub{submission_id}.ipynb",
+        graded=True,
+    )
+    db.add(sf)
+    db.flush()
+    db.add(Grade(
+        submission_file_id=sf.id, score=8.0,
+        feedback_text="Score: 8.0/10.", rationale_json=None,
+        graded_at=datetime.now(timezone.utc),
+    ))
+    db.commit()
+
+
+@patch("app.services.rubric.call_gemini_for_rubric")
+def test_force_regeneration_warns_when_existing_grades_reference_old_rubric(mock_gemini, seeded_db):
+    """
+    Bug fix (sub-feature 2.9 follow-up): force-regenerating a rubric never
+    touches existing Grade rows -- their rationale_json keeps referencing
+    criteria from the rubric version that was just replaced. No auto-cascade,
+    no DB change, just a visible warning with the stale count.
+    """
+    row = seeded_db.get(UnsolvedFile, 100)
+    row.rubric_json = json.dumps({"criteria": [{"criterion": "Old", "points_possible": 10.0}]})
+    row.rubric_generated = True
+    seeded_db.commit()
+
+    _add_graded_submission_file(seeded_db, unsolved_file_id=100, submission_id=201)
+    _add_graded_submission_file(seeded_db, unsolved_file_id=100, submission_id=202)
+
+    mock_gemini.return_value = json.dumps(
+        {"criteria": [{"criterion": "New work", "points_possible": 10.0}]}
+    )
+    result = generate_rubric_for_unsolved_file(seeded_db, 100, force=True)
+
+    assert result["success"] is True
+    assert "warning" in result
+    assert "2 existing grade(s)" in result["warning"]
+
+
+@patch("app.services.rubric.call_gemini_for_rubric")
+def test_force_regeneration_no_warning_when_no_existing_grades(mock_gemini, seeded_db):
+    """No graded submissions yet -- force-regenerating is a no-op concern, no warning key at all."""
+    row = seeded_db.get(UnsolvedFile, 100)
+    row.rubric_json = json.dumps({"criteria": [{"criterion": "Old", "points_possible": 10.0}]})
+    row.rubric_generated = True
+    seeded_db.commit()
+
+    mock_gemini.return_value = json.dumps(
+        {"criteria": [{"criterion": "New work", "points_possible": 10.0}]}
+    )
+    result = generate_rubric_for_unsolved_file(seeded_db, 100, force=True)
+
+    assert result["success"] is True
+    assert "warning" not in result
+
+
+@patch("app.services.rubric.call_gemini_for_rubric")
+def test_non_force_first_generation_no_warning_even_with_unrelated_grades(mock_gemini, seeded_db):
+    """
+    A plain (non-force) first-time generation never reaches the staleness
+    check at all -- no warning key, regardless of grades existing elsewhere.
+    """
+    _add_graded_submission_file(seeded_db, unsolved_file_id=100, submission_id=203)
+
+    mock_gemini.return_value = json.dumps(
+        {"criteria": [{"criterion": "Fresh", "points_possible": 10.0}]}
+    )
+    result = generate_rubric_for_unsolved_file(seeded_db, unsolved_file_id=100)
+
+    assert result["success"] is True
+    assert "warning" not in result
+
+
 @patch("app.services.rubric.call_gemini_for_rubric")
 def test_generate_rubric_missing_requirements(mock_gemini, seeded_db, monkeypatch):
     file_row = seeded_db.get(UnsolvedFile, 100)
