@@ -70,15 +70,34 @@ def build_evaluation_prompt(
         "4. Award points ('points_awarded') for each criterion based on correctness and completeness.\n"
         "5. You must NEVER award more than that criterion's 'points_possible', and never award negative points.\n"
         "6. Provide a concise, constructive explanation for the points awarded on each criterion.\n"
-        "7. CRITICAL — every code cell is tagged with its real '[execution_count: ...]' from the "
-        "submitted notebook. 'execution_count: None' means that specific cell was NEVER RUN by the "
-        "student, no matter how complete or correct its source code looks. If a criterion claims or "
-        "requires that a cell 'executed', 'ran successfully', 'produced output X', 'measured/printed a "
-        "value', or similar, you must NOT award credit for that claim unless the relevant cell shows a "
-        "real execution_count (not None) AND its recorded output actually supports the claim. Never "
-        "invent, assume, or infer output that is not literally shown. Well-written but never-executed "
-        "code can still earn credit for criteria that only require code structure/completeness — but "
-        "never for a criterion specifically about running, producing, or printing a result.\n"
+        "7. CRITICAL — every code cell is tagged with an explicit marker stating whether it WAS "
+        "executed or was NEVER EXECUTED, based on the submitted notebook's real execution_count and "
+        "recorded outputs (trust this marker's stated conclusion literally, including the rare case "
+        "where it says a missing execution_count should still be treated as executed because real "
+        "output is present). If a criterion claims or requires that a cell 'executed', 'ran "
+        "successfully', 'produced output X', 'measured/printed a value', or similar, you must NOT "
+        "award credit for that claim unless the relevant cell's marker says it WAS executed AND its "
+        "recorded output actually supports the claim. Never invent, assume, or infer output that is "
+        "not literally shown. Well-written but never-executed code can still earn credit for criteria "
+        "that only require code structure/completeness — but never for a criterion specifically about "
+        "running, producing, or printing a result.\n"
+        "8. If the unsolved notebook's instructions name a SPECIFIC required library/tool/framework "
+        "as the way to complete a step (e.g., \"evaluate using ragas\", \"use Streamlit\", \"use "
+        "Supabase\") — as opposed to only describing a goal or outcome without mandating a method "
+        "(e.g., \"evaluate your RAG app\", \"persist chat history\") — check whether the student's "
+        "submission actually uses that named tool, in a way that genuinely drives the required "
+        "functionality. A tool mentioned only in a general \"Resources\"/\"further reading\" list does "
+        "not count as a requirement. A superficial or token use of the named tool — e.g. an unused "
+        "import, or a trivial call that doesn't actually drive the required functionality — counts as "
+        "substitution, not compliance. When a tool IS named as the required method and the student "
+        "substituted their own custom implementation instead of genuinely using it, cap that "
+        "criterion's awarded points at roughly 20-30% of its points_possible, unless there is genuine "
+        "partial use of the named tool alongside the substitution (in which case award proportionally "
+        "to that partial use, not the full substitution cap). A failed or abandoned install/setup "
+        "attempt — e.g. a 'pip install ragas' cell that errors out, or one that succeeds but is never "
+        "actually imported or called afterward — does NOT count as genuine partial use; it is still "
+        "full substitution. Do not penalize substitution when the instructions only state a "
+        "goal/outcome without naming a specific required tool; any valid approach is acceptable there.\n"
         "5. Respond with ONLY valid JSON — absolutely no markdown fences (no ``` or ```json), "
         "and no conversational text before or after.\n\n"
         "Award points in 0.5-point increments only.\n"
@@ -426,13 +445,18 @@ def _append_recorded_outputs(cells: list[dict[str, Any]], code_cells: list[dict[
     Append parsed outputs to matching code-cell content for prompt context, and
     always tag the cell with an unambiguous execution marker.
 
-    execution_count is nbformat's own ground truth for whether the student ever
-    ran a given cell — None means never executed, no matter how complete or
-    correct its source looks. Every code cell gets this marker (not just ones
-    with outputs) so the grading model never has to infer execution state from
-    the mere absence of an "[recorded outputs]" block, which is genuinely
-    ambiguous: a cell that runs fine but prints nothing looks identical to one
-    that was never run at all unless execution_count is shown explicitly.
+    execution_count is nbformat's usual signal for whether the student ever ran
+    a given cell, but it isn't the only one: some save/export paths can leave a
+    cell's execution_count cleared to null while its recorded outputs remain
+    intact. Real, non-empty outputs are themselves direct evidence of a real
+    execution — outputs don't appear from nothing — so a cell counts as
+    executed if EITHER execution_count is set OR it has real recorded output;
+    only a cell with neither is genuinely "never executed." Every code cell
+    gets an explicit marker either way (not just ones with outputs) so the
+    grading model never has to infer execution state from the mere absence of
+    a "[recorded outputs]" block, which is genuinely ambiguous on its own: a
+    cell that runs fine but prints nothing looks identical to one that was
+    never run at all unless this is stated explicitly.
     """
     code_iter = iter(code_cells)
     for cell in cells:
@@ -441,10 +465,18 @@ def _append_recorded_outputs(cells: list[dict[str, Any]], code_cells: list[dict[
         parsed_code = next(code_iter, None)
         if not parsed_code:
             continue
-        executed = parsed_code.get("execution_count") is not None
         outputs = [str(item) for item in parsed_code.get("outputs", []) if str(item).strip()]
+        exec_count = parsed_code.get("execution_count")
+        executed = exec_count is not None or bool(outputs)
         if executed:
-            marker = "[execution_count: {}]".format(parsed_code.get("execution_count"))
+            if exec_count is not None:
+                marker = f"[execution_count: {exec_count} — this cell WAS executed]"
+            else:
+                marker = (
+                    "[execution_count: None, but this cell has real recorded "
+                    "output below — outputs don't appear without execution, so "
+                    "treat this cell as WAS executed despite the missing counter]"
+                )
             if outputs:
                 marker += "\n[recorded outputs]\n" + "\n".join(outputs)
         else:
