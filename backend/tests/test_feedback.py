@@ -703,7 +703,11 @@ class TestGradeSubmissionFileEndpoint:
             (s for s in before_data["students"] if s["student_id"] == 2), None
         )
         assert student_summary is not None
-        assert student_summary["combined_score"] is None
+        # Fairness fix (sub-feature 2.9): combined_score divides by the
+        # session's total assignment count, not by len(per_file). With 1
+        # UnsolvedFile in this session and nothing graded yet, that's 0/1,
+        # not None — None is reserved for a session with zero assignment files.
+        assert student_summary["combined_score"] == pytest.approx(0.0)
         assert student_summary["per_file"] == []
 
         # Grade the submission by patching generate_feedback_and_persist
