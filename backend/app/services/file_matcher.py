@@ -118,6 +118,10 @@ def match_submission_file_to_unsolved(
         The original filename of the student's notebook (e.g. "hw1_solved.ipynb").
     unsolved_candidates:
         List of dicts: [{"id": int, "filename": str, "requirements_text": str}, ...]
+        ``requirements_text`` may be empty/None for an unsolved file with no
+        markdown cells at all (e.g. instructions given purely as code
+        comments) — such a candidate is never excluded from the pool; see
+        the per-candidate scoring note below.
 
     Returns
     -------
@@ -146,16 +150,25 @@ def match_submission_file_to_unsolved(
     best_score: float = -1.0
 
     for candidate in unsolved_candidates:
-        content_score = content_similarity_score(
-            submitted_markdown,
-            candidate["requirements_text"],
-        )
+        requirements_text = candidate.get("requirements_text")
         filename_score = filename_similarity_score(
             submitted_filename,
             candidate["filename"],
         )
-        # Content carries 80% of the weight; filename is a tiebreaker signal.
-        combined_score = (0.8 * content_score) + (0.2 * filename_score)
+        if requirements_text:
+            # Content carries 80% of the weight; filename is a tiebreaker signal.
+            content_score = content_similarity_score(submitted_markdown, requirements_text)
+            combined_score = (0.8 * content_score) + (0.2 * filename_score)
+        else:
+            # No requirements text was ever extracted for this candidate (e.g.
+            # its unsolved notebook has no markdown cells — instructions given
+            # purely as code comments/TODOs). There is no content signal to
+            # compare, so fall back to filename similarity alone rather than
+            # excluding this candidate from the pool: dropping it here would
+            # shrink the candidate list and could trigger the single-candidate
+            # shortcut above for an unrelated remaining file, force-matching
+            # submissions to the wrong assignment.
+            combined_score = filename_score
 
         if combined_score > best_score:
             best_score = combined_score
@@ -187,8 +200,12 @@ def match_all_files_in_submission(db: DBSession, submission_id: int) -> list[dic
     Steps
     -----
     1. Load the Submission and its SubmissionFile rows.
-    2. Build unsolved_candidates from UnsolvedFile rows for the same session
-       that have non-empty parsed_requirements_text.
+    2. Build unsolved_candidates from every UnsolvedFile row for the same
+       session — including ones whose parsed_requirements_text is empty/None
+       (e.g. a notebook with no markdown cells, instructions given purely as
+       code comments). Such candidates are still scored by
+       match_submission_file_to_unsolved(), just via filename similarity
+       alone instead of content — never silently dropped from the pool.
     3. For each SubmissionFile, parse its .ipynb from disk and call
        match_submission_file_to_unsolved().
     4. Write matched_unsolved_file_id back to the DB and commit.
@@ -223,14 +240,13 @@ def match_all_files_in_submission(db: DBSession, submission_id: int) -> list[dic
 
     session_id = submission.session_id
 
-    # Load all unsolved files for this session that have been parsed already.
+    # Load every unsolved file for this session — including ones with no
+    # extracted requirements text (e.g. code-comment-only notebooks). These
+    # are still valid candidates; match_submission_file_to_unsolved() falls
+    # back to filename-only scoring for them rather than dropping them.
     unsolved_rows = (
         db.query(UnsolvedFile)
-        .filter(
-            UnsolvedFile.session_id == session_id,
-            UnsolvedFile.parsed_requirements_text.isnot(None),
-            UnsolvedFile.parsed_requirements_text != "",
-        )
+        .filter(UnsolvedFile.session_id == session_id)
         .all()
     )
 
