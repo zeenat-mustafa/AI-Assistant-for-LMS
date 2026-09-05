@@ -70,6 +70,15 @@ def build_evaluation_prompt(
         "4. Award points ('points_awarded') for each criterion based on correctness and completeness.\n"
         "5. You must NEVER award more than that criterion's 'points_possible', and never award negative points.\n"
         "6. Provide a concise, constructive explanation for the points awarded on each criterion.\n"
+        "7. CRITICAL — every code cell is tagged with its real '[execution_count: ...]' from the "
+        "submitted notebook. 'execution_count: None' means that specific cell was NEVER RUN by the "
+        "student, no matter how complete or correct its source code looks. If a criterion claims or "
+        "requires that a cell 'executed', 'ran successfully', 'produced output X', 'measured/printed a "
+        "value', or similar, you must NOT award credit for that claim unless the relevant cell shows a "
+        "real execution_count (not None) AND its recorded output actually supports the claim. Never "
+        "invent, assume, or infer output that is not literally shown. Well-written but never-executed "
+        "code can still earn credit for criteria that only require code structure/completeness — but "
+        "never for a criterion specifically about running, producing, or printing a result.\n"
         "5. Respond with ONLY valid JSON — absolutely no markdown fences (no ``` or ```json), "
         "and no conversational text before or after.\n\n"
         "Award points in 0.5-point increments only.\n"
@@ -413,7 +422,18 @@ def evaluate_submission_file(db: Session, submission_file_id: int) -> dict[str, 
 
 
 def _append_recorded_outputs(cells: list[dict[str, Any]], code_cells: list[dict[str, Any]]) -> None:
-    """Append parsed outputs to matching code-cell content for prompt context."""
+    """
+    Append parsed outputs to matching code-cell content for prompt context, and
+    always tag the cell with an unambiguous execution marker.
+
+    execution_count is nbformat's own ground truth for whether the student ever
+    ran a given cell — None means never executed, no matter how complete or
+    correct its source looks. Every code cell gets this marker (not just ones
+    with outputs) so the grading model never has to infer execution state from
+    the mere absence of an "[recorded outputs]" block, which is genuinely
+    ambiguous: a cell that runs fine but prints nothing looks identical to one
+    that was never run at all unless execution_count is shown explicitly.
+    """
     code_iter = iter(code_cells)
     for cell in cells:
         if cell.get("type") != "code":
@@ -421,6 +441,16 @@ def _append_recorded_outputs(cells: list[dict[str, Any]], code_cells: list[dict[
         parsed_code = next(code_iter, None)
         if not parsed_code:
             continue
+        executed = parsed_code.get("execution_count") is not None
         outputs = [str(item) for item in parsed_code.get("outputs", []) if str(item).strip()]
-        if outputs:
-            cell["content"] = f"{cell.get('content', '')}\n[recorded outputs]\n" + "\n".join(outputs)
+        if executed:
+            marker = "[execution_count: {}]".format(parsed_code.get("execution_count"))
+            if outputs:
+                marker += "\n[recorded outputs]\n" + "\n".join(outputs)
+        else:
+            marker = (
+                "[execution_count: None — this cell was NEVER EXECUTED by the "
+                "student. No output was produced, regardless of what the code "
+                "would do if run.]"
+            )
+        cell["content"] = f"{cell.get('content', '')}\n{marker}"

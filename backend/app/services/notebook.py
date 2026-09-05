@@ -35,7 +35,10 @@ def parse_notebook_file(ipynb_path: Union[str, Path]) -> dict:
     -------
     {
         "markdown_text": str,            # all markdown cells concatenated
-        "code_cells":    list[dict],     # [{"source": str, "outputs": list[str]}]
+        "code_cells":    list[dict],     # [{"source": str, "outputs": list[str],
+                                          #   "execution_count": int | None}, ...]
+                                          # execution_count is None iff the student
+                                          # never ran that cell, regardless of source content.
         "valid":         bool,
         "error":         str | None,
     }
@@ -141,7 +144,14 @@ def parse_notebook_file(ipynb_path: Union[str, Path]) -> dict:
                             error_text += "\n" + "\n".join(tb_clean)
                         outputs.append(error_text)
 
-                code_cells.append({"source": source, "outputs": outputs})
+                # execution_count is nbformat's own ground truth for whether this
+                # cell was ever run by the student: None means never executed,
+                # regardless of how correct or complete its source code looks.
+                code_cells.append({
+                    "source": source,
+                    "outputs": outputs,
+                    "execution_count": cell.get("execution_count"),
+                })
 
         result["markdown_text"] = "\n\n".join(markdown_parts)
         result["code_cells"] = code_cells
