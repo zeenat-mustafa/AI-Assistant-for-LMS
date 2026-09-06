@@ -27,6 +27,17 @@ FastAPI (Python) + SQLite/SQLAlchemy + Alembic migrations + JWT/bcrypt auth + lo
 - **Phases 4-6:** Not started. Phase 4 = MCP server. Phase 5 = Next.js frontend (thin UI, not the focus). Phase 6 = integration testing/polish/demo prep.
 - **Extended Goals (build only after Phase 6 fully complete):** Student chatbot (query-only against existing `rationale_json`, no new grading logic) + complaint routing via email/Discord (new integration work). Quiz generation from a course file + auto-grading + student-visible publish page.
 
+## Extended Goals (build only after Phase 6 fully complete)
+- **Student Chatbot:** students ask why they got a specific grade, grounded in the already-stored `rationale_json` (query interface only — data already exists from Phase 2, nothing new to store). Students can also ask general questions about their assignments/topics. Students can raise a complaint/concern routed to the relevant instructor via email or Discord (this part is new integration work, not just a query).
+- **Instructor-Triggered Quiz Generation:** instructor asks chatbot to generate a quiz from a specific course file; published to a student-visible page once released; responses auto-graded.
+
+## Future Work (explicitly out of scope for a long time — do NOT build, but design current work so these stay possible)
+These are not on the roadmap yet, but no current phase should make an architectural choice that accidentally blocks them later:
+- Full RAG pipeline (chunked, embedded course material in a vector DB) for broader topic/concept Q&A beyond specific grading rationale — don't hardcode assumptions that grading rationale is the only kind of retrievable context the system will ever have.
+- Instructor-triggered release of lecture/lab files for a specific week/day (on-demand, never automatically scheduled) — keep assignment-file visibility/release logic separable from upload logic, not fused together.
+- Support for additional submission formats beyond `.ipynb`/`.zip` — keep notebook-parsing logic in its own service layer (already true via `notebook.py`), don't scatter `.ipynb`-specific assumptions into routers/pipeline code.
+- Instructor-facing analytics chatbot for cohort-wide progress tracking — keep grade/rationale data structured and queryable (already true via `rationale_json`), don't lock reporting logic into single-student-only shapes.
+
 ## Known gaps (by design, not bugs — do not "fix" without being asked)
 - No LLM fallback for ambiguous/altered file matches yet (file_matcher.py's own TODO).
 - Students with zero submissions don't appear in `session_grade_report` at all.
