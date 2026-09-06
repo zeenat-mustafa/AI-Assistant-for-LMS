@@ -45,7 +45,7 @@ from mcp.server import MCPServer
 # queried here; this scaffold only establishes the pattern.
 from app.config import settings
 from app.database import SessionLocal, engine
-from app.mcp.tools import session_tools
+from app.mcp.tools import rubric_tools, session_tools
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +55,14 @@ server = MCPServer(
     instructions=(
         "Instructor-directed AI grading assistant for Jupyter notebook "
         "assignments. Resolve an instruction to a session with match_session "
-        "first; rubric, evaluation and grading tools land in Phase 4.3-4.5."
+        "first, then generate_rubric for an assignment file; evaluation and "
+        "grading tools land in Phase 4.4-4.5."
     ),
 )
 
 # Domain tool modules register themselves here (see app/mcp/tools/).
 session_tools.register(server)
+rubric_tools.register(server)
 
 
 @server.tool(

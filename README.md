@@ -100,10 +100,13 @@ It speaks JSON-RPC over **stdio**, so it prints no banner, binds no port, and bl
 |---|---|---|
 | `ping` | none | Connectivity check — returns `pong - AI Assistant for LMS MCP server is running`. Scaffold only; removed once the real tools land. |
 | `match_session` | `instruction: str`, `instructor_id: int` | Resolves a free-text instruction ("grade week 8 day 3") to one of that instructor's sessions. Returns `matched` / `ambiguous` / `no_match` — the same result the REST `/chat` endpoint uses, since both call the identical matcher. |
+| `generate_rubric` | `unsolved_file_id: int`, `force: bool = false` | Generates the 10-point rubric for one assignment file, or returns the cached one. Rubrics are generated once per assignment and reused for every student, so repeat calls cost nothing unless `force=true`. |
 
 `ambiguous` and `no_match` are normal outcomes, not errors: the matcher never force-matches on a close call, so the client should ask which session was meant rather than guessing.
 
-The remaining tools (rubric generation, evaluation, batch grading) arrive in Phase 4.3–4.5.
+`generate_rubric` with `force=true` adds a `warning` field if submissions were already graded against the previous rubric — those grades reference criteria that may no longer exist. Nothing is re-graded automatically; the count is surfaced so the instructor can decide.
+
+The remaining tools (evaluation, batch grading) arrive in Phase 4.4–4.5.
 
 > **SDK note:** built against `mcp` 2.x, where the high-level server class is `MCPServer`. Most tutorials still show 1.x's `FastMCP`, which will not run as-is against 2.x.
 
