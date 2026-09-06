@@ -19,6 +19,7 @@ class SessionRead(BaseModel):
     """Full session detail including its assignment files."""
     id: int
     title: str
+    instructor_id: int | None = None
     created_at: datetime
     unsolved_files: list["UnsolvedFileRead"] = []  # noqa: F821
 
