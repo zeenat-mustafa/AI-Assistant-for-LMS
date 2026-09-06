@@ -68,6 +68,42 @@ alembic revision --autogenerate -m "short description of the change"
 
 The baseline migration (`alembic/versions/a2ea273de1f2_baseline_current_schema.py`) represents the schema as of Phase 2's close — it is not meant to be regenerated or rewritten; every future schema change is a new migration on top of it.
 
+## MCP Server
+
+Alongside the REST API, the project exposes a [Model Context Protocol](https://modelcontextprotocol.io) server so an MCP client (Claude Desktop, an IDE, or the SDK's own client) can drive grading directly. It is a **separate process** from the FastAPI app, not a replacement for it — both talk to the same database.
+
+**Start it:**
+```bash
+cd backend
+python -m app.mcp
+```
+
+It speaks JSON-RPC over **stdio**, so it prints no banner, binds no port, and blocks waiting for a client — that is expected, not a hang. Normally you don't start it by hand; an MCP client launches it as a subprocess. Example client config:
+
+```json
+{
+  "mcpServers": {
+    "ai-assistant-for-lms": {
+      "command": "python",
+      "args": ["-m", "app.mcp"],
+      "cwd": "/absolute/path/to/backend"
+    }
+  }
+}
+```
+
+`cwd` matters: the SQLite path in `DATABASE_URL` is relative, so a client launching the server from elsewhere would silently create a different, empty database.
+
+**Available tools**
+
+| Tool | Arguments | Purpose |
+|---|---|---|
+| `ping` | none | Connectivity check — returns `pong - AI Assistant for LMS MCP server is running`. Scaffold only; removed once the real tools land. |
+
+The grading tools (session matching, rubric generation, evaluation, batch grading) arrive in Phase 4.2–4.5.
+
+> **SDK note:** built against `mcp` 2.x, where the high-level server class is `MCPServer`. Most tutorials still show 1.x's `FastMCP`, which will not run as-is against 2.x.
+
 ## Demo Accounts
 
 | Role | Email | Password |
@@ -83,8 +119,8 @@ These are seeded automatically for local development. Replace `SECRET_KEY` with 
 |---|---|---|
 | 1 | Authentication, session management, assignment/submission upload and download, database schema | ✅ Complete |
 | 2 | AI grading pipeline — notebook parsing, submission matching, rubric generation, evaluation, feedback, dual-provider AI layer, batch grading | ✅ Complete |
-| 3 | Instructor chatbot — natural-language session resolution and live-updating grading runs | ⏳ Upcoming |
-| 4 | MCP server — grading pipeline exposed as standardized callable tools | ⏳ Upcoming |
+| 3 | Instructor chatbot — natural-language session resolution and live-updating grading runs | ✅ Complete |
+| 4 | MCP server — grading pipeline exposed as standardized callable tools | 🚧 In progress |
 | 5 | Web dashboard for instructors and students | ⏳ Upcoming |
 | 6 | Integration testing, polish, and demo preparation | ⏳ Upcoming |
 
