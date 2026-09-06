@@ -23,7 +23,7 @@ FastAPI (Python) + SQLite/SQLAlchemy + Alembic migrations + JWT/bcrypt auth + lo
 ## Current status (update this section as phases complete)
 - **Phase 1 (Foundation): COMPLETE.** Auth, session CRUD, assignment/submission upload, grade-report endpoints.
 - **Phase 2 (AI Grading Pipeline, sub-features 2.1-2.9): COMPLETE, merged to `main`.** Full real-data validation done (not just mocked tests) — 3 genuine grading-quality bugs found and fixed (file-matching exclusion of code-comment-only assignments, execution-hallucination in evaluator, named-tool-substitution under-penalization), plus a live-DB schema gap resolved via Alembic. 223 tests passing. Full details: `Phase2_Completion_Record.pdf` (kept outside repo) and `phase2-known-gaps-record.txt`.
-- **Phase 3 (Instructor Chatbot + Session Matching): IN PROGRESS.** Build order: 3.1 (session matching, with ambiguity handling from the start) → 3.2 (filter parsing) → 3.3 (`/chat` endpoint) → 3.4 (SSE streaming) → 3.5 (summary formatting). Sub-feature 3.6 (never guess on ambiguity) is folded into 3.1, not separate.
+- **Phase 3 (Instructor Chatbot + Session Matching, sub-features 3.1-3.5): COMPLETE, merged to `main`.** 3.1 (session matching) → 3.2 (filter parsing) → 3.3 (`POST /chat`) → 3.4 (`POST /chat/stream`, SSE) → 3.5 (conversational summary messages); 3.6 (never guess on ambiguity) was folded into 3.1 as planned, not built separately. Required one prereq schema change first: `LMSSession` had no instructor ownership at all, so `instructor_id` + per-instructor title uniqueness were added via Alembic migration `b824df1246e5`. Full real-data validation done (not just mocked tests) — 8 genuine bugs found and fixed, 5 of them only surfacing through real Swagger/dev-DB testing (single-item "ambiguous" candidate list, swapped week/day numbers tying at confidence 1.0, digit near-misses still fuzzy-scored, `combined_score` rounding to 0.01 instead of 0.5, and an incomplete dev-DB reset that left 25 orphaned files in `storage/sessions/`). SSE streaming was verified live with timestamped `curl -N` output, not assumed. 273 tests passing. Full details: `phase3-known-gaps-record.txt`.
 - **Phases 4-6:** Not started. Phase 4 = MCP server. Phase 5 = Next.js frontend (thin UI, not the focus). Phase 6 = integration testing/polish/demo prep.
 - **Extended Goals (build only after Phase 6 fully complete):** Student chatbot (query-only against existing `rationale_json`, no new grading logic) + complaint routing via email/Discord (new integration work). Quiz generation from a course file + auto-grading + student-visible publish page.
 
@@ -39,13 +39,21 @@ These are not on the roadmap yet, but no current phase should make an architectu
 - Instructor-facing analytics chatbot for cohort-wide progress tracking — keep grade/rationale data structured and queryable (already true via `rationale_json`), don't lock reporting logic into single-student-only shapes.
 
 ## Known gaps (by design, not bugs — do not "fix" without being asked)
+Phase 1/2:
 - No LLM fallback for ambiguous/altered file matches yet (file_matcher.py's own TODO).
 - Students with zero submissions don't appear in `session_grade_report` at all.
 - Rubric criteria count (3-6) isn't strictly validated, only checked non-empty.
 - A handful of cosmetic items (dead imports, stale docstrings, notebooks parsed twice) — see `phase2-known-gaps-record.txt` for the full list.
 
+Phase 3 (see `phase3-known-gaps-record.txt`):
+- A student whose real name is an ordinary English word ("Grace", "Will") can false-positive match that word used ordinarily in an instruction. Unlike other misses, nothing catches this — it isn't routed to `ambiguous`/`not_found`, it silently narrows scope.
+- No LLM fallback in `instruction_filter.py` — deliberate: the closed 5-shape output contract has nowhere to route "the second student" or exclusion queries.
+- Exclusionary filters ("everyone except Ali") are detected and surfaced as `unsupported_filter` rather than silently inverting intent; force-regrading already-graded files is likewise not built.
+- When an instruction under-specifies (e.g. "grade week 10" where two Week 10 sessions exist), the matcher returns `ambiguous` rather than guessing — working as designed, not a bug.
+- No auth/token-refresh handling for long-lived SSE connections on `/chat/stream`.
+
 ## Testing philosophy
-Every sub-feature needs both automated tests AND real-data verification before being called done — mocked tests alone have already missed real bugs (see Phase 2's 3 grading-quality bugs). For anything involving LLM judgment calls, get exact wording/approach approved before implementing, then re-verify against the real production model (Gemini), not just the fallback (Groq) — a fix is not confirmed until proven on the primary model.
+Every sub-feature needs both automated tests AND real-data verification before being called done — mocked tests alone have already missed real bugs (Phase 2's 3 grading-quality bugs, and 5 of Phase 3's 8, which surfaced only through real Swagger/dev-DB testing after the mocked tests were already green). For anything involving LLM judgment calls, get exact wording/approach approved before implementing, then re-verify against the real production model (Gemini), not just the fallback (Groq) — a fix is not confirmed until proven on the primary model.
 
 ## Resuming after an agent runs out of context/credits
 Never assume a prior session's summary is accurate. Re-verify actual file contents against whatever checklist applies before continuing any incomplete work.
