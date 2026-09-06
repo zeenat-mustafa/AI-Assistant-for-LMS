@@ -102,12 +102,14 @@ It speaks JSON-RPC over **stdio**, so it prints no banner, binds no port, and bl
 | `match_session` | `instruction: str`, `instructor_id: int` | Resolves a free-text instruction ("grade week 8 day 3") to one of that instructor's sessions. Returns `matched` / `ambiguous` / `no_match` — the same result the REST `/chat` endpoint uses, since both call the identical matcher. |
 | `generate_rubric` | `unsolved_file_id: int`, `force: bool = false` | Generates the 10-point rubric for one assignment file, or returns the cached one. Rubrics are generated once per assignment and reused for every student, so repeat calls cost nothing unless `force=true`. |
 | `evaluate_submission` | `submission_file_id: int` | Evaluates one student notebook against its assignment's rubric, returning a score out of 10 plus a criterion-by-criterion breakdown. Generates the rubric first if the assignment doesn't have one. Reports what it found — it does **not** record a grade. |
+| `grade_submission_file` | `submission_file_id: int` | Grades one student notebook **and records the grade**. Re-grading overwrites the existing grade. |
+| `grade_session` | `session_id: int`, `student_id: int \| null = null` | Grades every ungraded submission in a session, optionally for one student. Returns all per-file progress events plus a summary — the same payload as REST's `POST /sessions/{id}/grade`. Already-graded files are skipped, so re-running is safe. |
 
 `ambiguous` and `no_match` are normal outcomes, not errors: the matcher never force-matches on a close call, so the client should ask which session was meant rather than guessing.
 
 `generate_rubric` with `force=true` adds a `warning` field if submissions were already graded against the previous rubric — those grades reference criteria that may no longer exist. Nothing is re-graded automatically; the count is surfaced so the instructor can decide.
 
-The batch grading tool arrives in Phase 4.5.
+`grade_session` runs to completion before returning — an MCP tool call is a single request/response, not a stream, so it drains the pipeline and returns everything at once, exactly as the non-streaming REST batch endpoint does. For live per-file progress, use the SSE endpoint `POST /chat/stream` instead.
 
 > **SDK note:** built against `mcp` 2.x, where the high-level server class is `MCPServer`. Most tutorials still show 1.x's `FastMCP`, which will not run as-is against 2.x.
 

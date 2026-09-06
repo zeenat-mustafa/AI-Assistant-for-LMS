@@ -45,7 +45,12 @@ from mcp.server import MCPServer
 # queried here; this scaffold only establishes the pattern.
 from app.config import settings
 from app.database import SessionLocal, engine
-from app.mcp.tools import evaluation_tools, rubric_tools, session_tools
+from app.mcp.tools import (
+    evaluation_tools,
+    grading_tools,
+    rubric_tools,
+    session_tools,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +61,8 @@ server = MCPServer(
         "Instructor-directed AI grading assistant for Jupyter notebook "
         "assignments. Resolve an instruction to a session with match_session "
         "first, then generate_rubric for an assignment file and "
-        "evaluate_submission for a student notebook; batch grading lands in "
-        "Phase 4.5."
+        "evaluate_submission for a student notebook, and grade_session or "
+        "grade_submission_file to record grades."
     ),
 )
 
@@ -65,6 +70,7 @@ server = MCPServer(
 session_tools.register(server)
 rubric_tools.register(server)
 evaluation_tools.register(server)
+grading_tools.register(server)
 
 
 @server.tool(
