@@ -68,6 +68,51 @@ alembic revision --autogenerate -m "short description of the change"
 
 The baseline migration (`alembic/versions/a2ea273de1f2_baseline_current_schema.py`) represents the schema as of Phase 2's close — it is not meant to be regenerated or rewritten; every future schema change is a new migration on top of it.
 
+## MCP Server
+
+Alongside the REST API, the project exposes a [Model Context Protocol](https://modelcontextprotocol.io) server so an MCP client (Claude Desktop, an IDE, or the SDK's own client) can drive grading directly. It is a **separate process** from the FastAPI app, not a replacement for it — both talk to the same database.
+
+**Start it:**
+```bash
+cd backend
+python -m app.mcp
+```
+
+It speaks JSON-RPC over **stdio**, so it prints no banner, binds no port, and blocks waiting for a client — that is expected, not a hang. Normally you don't start it by hand; an MCP client launches it as a subprocess. Example client config:
+
+```json
+{
+  "mcpServers": {
+    "ai-assistant-for-lms": {
+      "command": "python",
+      "args": ["-m", "app.mcp"],
+      "cwd": "/absolute/path/to/backend"
+    }
+  }
+}
+```
+
+`cwd` matters: the SQLite path in `DATABASE_URL` is relative, so a client launching the server from elsewhere would silently create a different, empty database.
+
+**Available tools**
+
+| Tool | Arguments | Purpose |
+|---|---|---|
+| `ping` | none | Connectivity check — returns `pong - AI Assistant for LMS MCP server is running`. Useful for confirming a client's server config (especially `cwd`) before debugging anything else. |
+| `match_session` | `instruction: str`, `instructor_id: int` | Resolves a free-text instruction ("grade week 8 day 3") to one of that instructor's sessions. Returns `matched` / `ambiguous` / `no_match` — the same result the REST `/chat` endpoint uses, since both call the identical matcher. |
+| `generate_rubric` | `unsolved_file_id: int`, `force: bool = false` | Generates the 10-point rubric for one assignment file, or returns the cached one. Rubrics are generated once per assignment and reused for every student, so repeat calls cost nothing unless `force=true`. |
+| `evaluate_submission` | `submission_file_id: int` | Evaluates one student notebook against its assignment's rubric, returning a score out of 10 plus a criterion-by-criterion breakdown. Generates the rubric first if the assignment doesn't have one. Reports what it found — it does **not** record a grade. |
+| `grade_submission_file` | `submission_file_id: int` | Grades one student notebook **and records the grade**. Re-grading overwrites the existing grade. |
+| `grade_session` | `session_id: int`, `student_id: int \| null = null` | Grades every ungraded submission in a session, optionally for one student. Returns all per-file progress events plus a summary — the same payload as REST's `POST /sessions/{id}/grade`. Already-graded files are skipped, so re-running is safe. |
+
+`ambiguous` and `no_match` are normal outcomes, not errors: the matcher never force-matches on a close call, so the client should ask which session was meant rather than guessing.
+
+`generate_rubric` with `force=true` adds a `warning` field if submissions were already graded against the previous rubric — those grades reference criteria that may no longer exist. Nothing is re-graded automatically; the count is surfaced so the instructor can decide.
+
+`grade_session` runs to completion before returning — an MCP tool call is a single request/response, not a stream, so it drains the pipeline and returns everything at once, exactly as the non-streaming REST batch endpoint does. For live per-file progress, use the SSE endpoint `POST /chat/stream` instead.
+
+> **SDK note:** built against `mcp` 2.x, where the high-level server class is `MCPServer`. Most tutorials still show 1.x's `FastMCP`, which will not run as-is against 2.x.
+
 ## Demo Accounts
 
 | Role | Email | Password |
@@ -83,8 +128,8 @@ These are seeded automatically for local development. Replace `SECRET_KEY` with 
 |---|---|---|
 | 1 | Authentication, session management, assignment/submission upload and download, database schema | ✅ Complete |
 | 2 | AI grading pipeline — notebook parsing, submission matching, rubric generation, evaluation, feedback, dual-provider AI layer, batch grading | ✅ Complete |
-| 3 | Instructor chatbot — natural-language session resolution and live-updating grading runs | ⏳ Upcoming |
-| 4 | MCP server — grading pipeline exposed as standardized callable tools | ⏳ Upcoming |
+| 3 | Instructor chatbot — natural-language session resolution and live-updating grading runs | ✅ Complete |
+| 4 | MCP server — grading pipeline exposed as standardized callable tools | ✅ Complete |
 | 5 | Web dashboard for instructors and students | ⏳ Upcoming |
 | 6 | Integration testing, polish, and demo preparation | ⏳ Upcoming |
 

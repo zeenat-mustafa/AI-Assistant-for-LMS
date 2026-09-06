@@ -1,0 +1,56 @@
+Phase 4 — Known Gaps Record
+============================
+Gaps accepted by design during Phase 4 sub-features. Not bugs — do not "fix"
+without being asked. See CLAUDE.md's "Known gaps" section for the Phase 1/2
+equivalents, and phase3-known-gaps-record.txt for Phase 3's.
+
+Sub-feature 4.6 (chained workflow verification)
+------------------------------------------------------------------------
+- NO DISCOVERY TOOLS. The MCP surface exposes no list_sessions,
+  list_assignments or list_submissions. Three of the six tools require
+  ids the client has no way to obtain through MCP:
+      generate_rubric(unsolved_file_id)
+      evaluate_submission(submission_file_id)
+      grade_submission_file(submission_file_id)
+  match_session is the ONLY tool that turns natural language into an id,
+  and it only produces a session_id — never an assignment or submission
+  id. During 4.6's chained verification these ids had to be read
+  straight from the database, which a real MCP client could not do.
+
+  Practical effect: an MCP client can today run
+      match_session -> grade_session
+  end to end from natural language, because grade_session takes only a
+  session_id (plus an optional student_id). But it CANNOT reach
+  generate_rubric, evaluate_submission or grade_submission_file without
+  ids supplied out-of-band by a human.
+
+  DECISION (deferred, deliberately): not built in Phase 4. Revisit
+  before Phase 6 to decide whether the demo needs it. If it is built,
+  the natural shape is read-only listing tools following the same
+  app/mcp/tools/ pattern — they would wrap plain DB queries, not new
+  logic, since the REST routers already expose equivalent listings.
+
+Sub-feature 4.1 (scaffold)
+------------------------------------------------------------------------
+- `ping` was scoped as a temporary scaffold tool ("removed once the real
+  tools land") but was deliberately retained through 4.2-4.5, since each
+  sub-feature's prompt explicitly required not removing it. It is now
+  documented as a client-config diagnostic rather than scaffolding —
+  genuinely useful for confirming a client's `cwd` is right, since a
+  wrong `cwd` silently points the server at a different, empty SQLite
+  database. Remove it only if that stops being useful.
+
+Whole phase (security posture)
+------------------------------------------------------------------------
+- NO AUTHENTICATION on the MCP surface. The REST API requires a JWT and
+  distinguishes instructor from student, but the MCP server trusts
+  whoever launched the process. Notably match_session takes
+  instructor_id as a caller-supplied ARGUMENT rather than deriving it
+  from an authenticated identity, so a client can pass any instructor's
+  id and read that instructor's sessions.
+
+  This is acceptable for the current design — a local stdio server the
+  instructor's own MCP client spawns on their own machine, where the
+  process boundary IS the trust boundary. It would need addressing
+  before exposing the server over sse/streamable-http, which the SDK
+  makes a one-line change (see app/mcp/server.py's transport note).
