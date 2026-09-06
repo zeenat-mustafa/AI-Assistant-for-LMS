@@ -99,8 +99,11 @@ It speaks JSON-RPC over **stdio**, so it prints no banner, binds no port, and bl
 | Tool | Arguments | Purpose |
 |---|---|---|
 | `ping` | none | Connectivity check — returns `pong - AI Assistant for LMS MCP server is running`. Scaffold only; removed once the real tools land. |
+| `match_session` | `instruction: str`, `instructor_id: int` | Resolves a free-text instruction ("grade week 8 day 3") to one of that instructor's sessions. Returns `matched` / `ambiguous` / `no_match` — the same result the REST `/chat` endpoint uses, since both call the identical matcher. |
 
-The grading tools (session matching, rubric generation, evaluation, batch grading) arrive in Phase 4.2–4.5.
+`ambiguous` and `no_match` are normal outcomes, not errors: the matcher never force-matches on a close call, so the client should ask which session was meant rather than guessing.
+
+The remaining tools (rubric generation, evaluation, batch grading) arrive in Phase 4.3–4.5.
 
 > **SDK note:** built against `mcp` 2.x, where the high-level server class is `MCPServer`. Most tutorials still show 1.x's `FastMCP`, which will not run as-is against 2.x.
 

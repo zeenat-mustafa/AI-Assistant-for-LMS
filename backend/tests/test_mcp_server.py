@@ -46,13 +46,16 @@ def test_server_instantiates_with_expected_identity():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.anyio
-async def test_ping_is_registered_and_is_the_only_tool():
+async def test_ping_is_registered():
+    """
+    4.1 registered `ping` as the only tool; 4.2+ add real domain tools
+    alongside it, so this asserts `ping` survives rather than that it is
+    alone. Each domain tool has its own test module (e.g.
+    test_mcp_session_tool.py).
+    """
     tools = await server.list_tools()
     names = [t.name for t in tools]
-    assert names == ["ping"], (
-        "4.1 registers exactly one scaffold tool; the real grading tools "
-        f"arrive in 4.2-4.5. Found: {names}"
-    )
+    assert "ping" in names, f"ping should still be registered. Found: {names}"
 
 
 @pytest.mark.anyio

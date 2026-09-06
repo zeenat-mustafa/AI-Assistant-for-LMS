@@ -4,10 +4,10 @@ Phase 4, Sub-feature 4.1: MCP server scaffold.
 Exposes this project over the Model Context Protocol so an MCP client
 (Claude Desktop, an IDE, or the SDK's own client) can drive grading
 directly, alongside — not instead of — the existing FastAPI REST API.
-This module is the scaffold only: it proves the server starts, registers
-a tool, and can reach the same database/config the REST app uses. The
-real tools (session matching, rubric generation, evaluation, grading)
-arrive in 4.2-4.5.
+server.py itself stays a thin registry: it builds the MCPServer, keeps the
+`ping` diagnostic, and asks each domain tool module under app/mcp/tools/
+to register itself. The real grading tools land there — session matching
+in 4.2, rubric/evaluation/grading in 4.3-4.5.
 
 Running it
 ──────────
@@ -45,6 +45,7 @@ from mcp.server import MCPServer
 # queried here; this scaffold only establishes the pattern.
 from app.config import settings
 from app.database import SessionLocal, engine
+from app.mcp.tools import session_tools
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +54,13 @@ server = MCPServer(
     version="0.1.0",
     instructions=(
         "Instructor-directed AI grading assistant for Jupyter notebook "
-        "assignments. Scaffold only: the grading tools land in Phase 4.2-4.5."
+        "assignments. Resolve an instruction to a session with match_session "
+        "first; rubric, evaluation and grading tools land in Phase 4.3-4.5."
     ),
 )
+
+# Domain tool modules register themselves here (see app/mcp/tools/).
+session_tools.register(server)
 
 
 @server.tool(
