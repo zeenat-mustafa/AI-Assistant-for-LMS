@@ -98,7 +98,7 @@ It speaks JSON-RPC over **stdio**, so it prints no banner, binds no port, and bl
 
 | Tool | Arguments | Purpose |
 |---|---|---|
-| `ping` | none | Connectivity check — returns `pong - AI Assistant for LMS MCP server is running`. Scaffold only; removed once the real tools land. |
+| `ping` | none | Connectivity check — returns `pong - AI Assistant for LMS MCP server is running`. Useful for confirming a client's server config (especially `cwd`) before debugging anything else. |
 | `match_session` | `instruction: str`, `instructor_id: int` | Resolves a free-text instruction ("grade week 8 day 3") to one of that instructor's sessions. Returns `matched` / `ambiguous` / `no_match` — the same result the REST `/chat` endpoint uses, since both call the identical matcher. |
 | `generate_rubric` | `unsolved_file_id: int`, `force: bool = false` | Generates the 10-point rubric for one assignment file, or returns the cached one. Rubrics are generated once per assignment and reused for every student, so repeat calls cost nothing unless `force=true`. |
 | `evaluate_submission` | `submission_file_id: int` | Evaluates one student notebook against its assignment's rubric, returning a score out of 10 plus a criterion-by-criterion breakdown. Generates the rubric first if the assignment doesn't have one. Reports what it found — it does **not** record a grade. |
@@ -129,7 +129,7 @@ These are seeded automatically for local development. Replace `SECRET_KEY` with 
 | 1 | Authentication, session management, assignment/submission upload and download, database schema | ✅ Complete |
 | 2 | AI grading pipeline — notebook parsing, submission matching, rubric generation, evaluation, feedback, dual-provider AI layer, batch grading | ✅ Complete |
 | 3 | Instructor chatbot — natural-language session resolution and live-updating grading runs | ✅ Complete |
-| 4 | MCP server — grading pipeline exposed as standardized callable tools | 🚧 In progress |
+| 4 | MCP server — grading pipeline exposed as standardized callable tools | ✅ Complete |
 | 5 | Web dashboard for instructors and students | ⏳ Upcoming |
 | 6 | Integration testing, polish, and demo preparation | ⏳ Upcoming |
 
