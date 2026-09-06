@@ -325,3 +325,87 @@ def test_missing_instruction_field_returns_422(api_client):
     c, instructor_token, *_ = api_client
     res = c.post(_ENDPOINT, json={}, headers=_auth(instructor_token))
     assert res.status_code == 422
+
+
+# ===========================================================================
+# POST /chat/stream -- Phase 3, Sub-feature 3.4
+#
+# _resolve_chat_instruction and grade_session_batch are mocked at the
+# boundary — their own internal logic (and /chat's use of the same
+# resolution helper) is already covered above and in
+# test_session_matcher.py / test_instruction_filter.py. These tests only
+# confirm /chat/stream frames each outcome as SSE events correctly.
+# ===========================================================================
+
+_STREAM_ENDPOINT = "/api/v1/chat/stream"
+
+
+def _parse_sse_events(raw_text: str) -> list[dict]:
+    """Split raw SSE text on the blank-line frame boundary and parse each
+    "data: {...}" block back into a dict."""
+    events = []
+    for block in raw_text.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        assert block.startswith("data: "), f"unexpected SSE line: {block!r}"
+        events.append(json.loads(block[len("data: "):]))
+    return events
+
+
+def _fake_grade_session_batch(db, session_id, student_id=None):
+    yield {"event": "checking", "student_id": 2, "filename": "hw1.ipynb"}
+    yield {"event": "graded", "student_id": 2, "filename": "hw1.ipynb", "score": 8.5}
+    yield {"event": "summary", "total": 1, "graded": 1, "failed": 0, "failures": []}
+
+
+def test_stream_early_exit_produces_one_event(api_client):
+    c, instructor_token, *_ = api_client
+    early_exit = {"status": "ambiguous_session", "candidates": [
+        {"session_id": 10, "session_title": "DS101", "confidence": 0.9},
+        {"session_id": 11, "session_title": "DS101 Extra", "confidence": 0.85},
+    ]}
+    with patch("app.routers.chat._resolve_chat_instruction", return_value=early_exit):
+        res = c.post(
+            _STREAM_ENDPOINT, json={"instruction": "grade ds101"}, headers=_auth(instructor_token)
+        )
+
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("text/event-stream")
+    events = _parse_sse_events(res.text)
+    assert events == [early_exit]
+
+
+def test_stream_resolved_streams_events_in_order(api_client):
+    c, instructor_token, *_ = api_client
+    resolution = {
+        "resolved": True, "session_id": 10, "session_title": "DS101",
+        "student_id": None, "student_name": None,
+    }
+    with patch(
+        "app.routers.chat._resolve_chat_instruction", return_value=resolution
+    ), patch(
+        "app.services.grading_pipeline.grade_session_batch", _fake_grade_session_batch
+    ):
+        res = c.post(
+            _STREAM_ENDPOINT, json={"instruction": "grade ds101"}, headers=_auth(instructor_token)
+        )
+
+    assert res.status_code == 200
+    events = _parse_sse_events(res.text)
+    assert [e["event"] for e in events] == ["checking", "graded", "summary"]
+    assert events[-1] == {"event": "summary", "total": 1, "graded": 1, "failed": 0, "failures": []}
+
+
+def test_stream_non_instructor_returns_403(api_client):
+    c, _, student_token, _ = api_client
+    res = c.post(
+        _STREAM_ENDPOINT, json={"instruction": "grade ds101"}, headers=_auth(student_token)
+    )
+    assert res.status_code == 403
+
+
+def test_stream_missing_instruction_field_returns_422(api_client):
+    c, instructor_token, *_ = api_client
+    res = c.post(_STREAM_ENDPOINT, json={}, headers=_auth(instructor_token))
+    assert res.status_code == 422
