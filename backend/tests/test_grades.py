@@ -246,8 +246,9 @@ class TestGradeAveragingFairness:
         assert res.status_code == 200
         data = res.json()
         assert len(data["per_file"]) == 3  # ungraded file has no Grade row, excluded from per_file
-        # Bug would have given 15/3 = 5.0 — correct fairness-adjusted value is 15/4 = 3.75
-        assert data["combined_score"] == pytest.approx(15.0 / 4)
+        # Bug would have given 15/3 = 5.0 — fairness-adjusted value is 15/4 = 3.75,
+        # which then rounds to the nearest 0.5 increment -> 4.0.
+        assert data["combined_score"] == pytest.approx(4.0)
         assert data["combined_score"] != pytest.approx(15.0 / 3)
 
     # ── 4. Same math holds across all three endpoints ───────────────────────
@@ -284,6 +285,63 @@ class TestGradeAveragingFairness:
         )
         assert mine_res.status_code == 200
         assert mine_res.json()["combined_score"] == pytest.approx(24.0 / 4)
+
+    # ── 5. combined_score rounds to the nearest 0.5, not nearest 0.01 ───────
+
+    def test_combined_score_rounds_down_to_nearest_half(self, client, db):
+        """
+        4 scores of 8.5, 8, 10, 10 sum to 36.5; divided by 4 assignments
+        that's 9.125 — must round to the nearest 0.5 increment (9.0), not
+        plain 2-decimal rounding (9.12/9.13). Real bug found via manual
+        testing: combined_score previously used round(combined, 2).
+        """
+        c, instr_token, _tokens = client
+        submission = Submission(
+            id=104, session_id=10, student_id=2,
+            original_filename="d.zip", uploaded_file_path="10/submissions/2/d.zip",
+        )
+        db.add(submission)
+        db.commit()
+        scores = [8.5, 8.0, 10.0, 10.0]  # sum = 36.5, /4 = 9.125
+        for uf_id, score in zip(range(1, 5), scores):
+            _add_graded_submission_file(
+                db, submission_id=104, matched_unsolved_file_id=uf_id,
+                filename=f"hw{uf_id}.ipynb", score=score,
+            )
+
+        res = c.get(
+            "/api/v1/sessions/10/grades/2",
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["combined_score"] == 9.0
+
+    def test_combined_score_rounds_up_to_nearest_half(self, client, db):
+        """9.5+9.5+9.5+9.0 sum to 37.5; divided by 4 that's 9.375 — nearest
+        0.5 increment is 9.5, confirming this is genuine nearest-0.5
+        rounding (not truncation, which would give 9.0 instead)."""
+        c, instr_token, _tokens = client
+        submission = Submission(
+            id=105, session_id=10, student_id=3,
+            original_filename="e.zip", uploaded_file_path="10/submissions/3/e.zip",
+        )
+        db.add(submission)
+        db.commit()
+        scores = [9.5, 9.5, 9.5, 9.0]  # sum = 37.5, /4 = 9.375
+        for uf_id, score in zip(range(1, 5), scores):
+            _add_graded_submission_file(
+                db, submission_id=105, matched_unsolved_file_id=uf_id,
+                filename=f"hw{uf_id}.ipynb", score=score,
+            )
+
+        res = c.get(
+            "/api/v1/sessions/10/grades/3",
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["combined_score"] == 9.5
 
     def test_no_submission_at_all_scores_zero_not_none(self, client, db):
         """
