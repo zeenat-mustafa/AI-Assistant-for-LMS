@@ -116,6 +116,64 @@ def test_typo_partial_phrasing_matches_without_llm(db):
     mock_call_llm.assert_not_called()
 
 
+def test_swapped_week_day_numbers_not_confused(db):
+    """
+    Regression test: found via real Swagger testing against the live dev DB.
+    "Week 2 Day 1" and "Week 1 Day 2" share the exact same token set
+    ({week, 1, day, 2}) under plain bag-of-words scoring, so an instruction
+    naming either one scored both titles at confidence 1.0 and returned
+    "ambiguous" — wrong, since the instruction unambiguously names one
+    specific session. The matcher must track which number follows "week"
+    and which follows "day", not just whether the number appears somewhere
+    in the title.
+    """
+    instructor = _make_instructor(db, user_id=1)
+    _make_session(db, session_id=1, title="Week 2 Day 1", instructor_id=instructor.id)
+    _make_session(db, session_id=2, title="Week 1 Day 2", instructor_id=instructor.id)
+
+    with patch("app.services.session_matcher.llm_provider.call_llm") as mock_call_llm:
+        result = match_instruction_to_session("grade week 2 day 1", instructor.id, db)
+
+    assert result["status"] == "matched"
+    assert result["session_id"] == 1
+    assert result["session_title"] == "Week 2 Day 1"
+    mock_call_llm.assert_not_called()
+
+
+def test_digit_only_near_miss_resolves_confidently(db):
+    """
+    Regression test: found via real Swagger testing against the live dev DB
+    (5 real sessions), one level past test_swapped_week_day_numbers_not_
+    confused. That fix (merging "week"+number into one token) stopped exact
+    ties, but "Week 1 Day 1" and "Week 3 Day 1" still shared "Day 1" with
+    the target "Week 2 Day 1", and their mismatched week number ("1"/"3" vs
+    "2") still scored ~0.8 similarity under plain character-level
+    SequenceMatcher (4 of 5 characters of "week1"/"week3" match "week2") —
+    close enough to stay inside the ambiguity margin against the correct
+    match, so "grade week 2 day 1" against these real titles still returned
+    "ambiguous" instead of resolving to the one correct session.
+
+    Fix: numeric tokens must match EXACTLY or score 0 — a single-digit
+    difference is a different week, not a "close" one. This must resolve
+    to session 3 alone, confidently, with NO margin/threshold change.
+    """
+    instructor = _make_instructor(db, user_id=1)
+    _make_session(db, session_id=1, title="Week 1 Day 1", instructor_id=instructor.id)
+    _make_session(db, session_id=2, title="Week 1 Day 2", instructor_id=instructor.id)
+    _make_session(db, session_id=3, title="Week 2 Day 1", instructor_id=instructor.id)
+    _make_session(db, session_id=4, title="Week 2 Day 2", instructor_id=instructor.id)
+    _make_session(db, session_id=5, title="Week 3 Day 1", instructor_id=instructor.id)
+
+    with patch("app.services.session_matcher.llm_provider.call_llm") as mock_call_llm:
+        result = match_instruction_to_session("grade week 2 day 1", instructor.id, db)
+
+    assert result["status"] == "matched"
+    assert result["session_id"] == 3
+    assert result["session_title"] == "Week 2 Day 1"
+    assert result["confidence"] == 1.0
+    mock_call_llm.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # 3. Two similarly-named sessions scoring close together -> ambiguous
 # ---------------------------------------------------------------------------
@@ -145,26 +203,31 @@ def test_ambiguous_two_similar_sessions(db):
 
 def test_ambiguous_candidates_never_a_single_item_list(db):
     """
-    Regression test: found via real dev-DB verification during 3.3.
-    "grade week 10" against real titles ("Week 10 Day 3", "Week 1 Day 1",
-    "Week 3 Day 1", ...) scored the top session at 0.5625 with every other
-    candidate below SESSION_MATCH_THRESHOLD (0.55) but within
-    CLEAR_WINNER_MARGIN (0.15) of the top score — not a clear winner, but
-    filtering the "ambiguous" candidate list to only entries >= 0.55 left
-    exactly one entry, a nonsensical "ambiguous, pick one of: just this one"
-    response. The candidate list must include every entry within margin of
-    the best score, regardless of whether each one individually clears
-    SESSION_MATCH_THRESHOLD, so "ambiguous" always means 2+ real candidates.
+    Regression test: found via real dev-DB verification during 3.3 (the
+    candidate-filtering bug itself, not the scoring bug fixed later in 3.1).
+    The "ambiguous" candidate list must include every entry within
+    CLEAR_WINNER_MARGIN of the best score, regardless of whether each one
+    individually clears SESSION_MATCH_THRESHOLD, so "ambiguous" always means
+    2+ real candidates — never a nonsensical "ambiguous, pick one of: just
+    this one" response.
+
+    Scenario: the instruction only names the week, not the day, so two
+    sessions sharing that week with different days are genuinely and
+    correctly tied (an unrelated week is still excluded by the digit-exact
+    numeric matching added later — see test_digit_only_near_miss_resolves_
+    confidently for that fix).
     """
     instructor = _make_instructor(db, user_id=1)
-    _make_session(db, session_id=1, title="Week 10 Day 3", instructor_id=instructor.id)
-    _make_session(db, session_id=2, title="Week 1 Day 1", instructor_id=instructor.id)
-    _make_session(db, session_id=3, title="Week 3 Day 1", instructor_id=instructor.id)
+    _make_session(db, session_id=1, title="Week 10 Day 1", instructor_id=instructor.id)
+    _make_session(db, session_id=2, title="Week 10 Day 3", instructor_id=instructor.id)
+    _make_session(db, session_id=3, title="Week 1 Day 1", instructor_id=instructor.id)
 
     result = match_instruction_to_session("grade week 10", instructor.id, db)
 
     assert result["status"] == "ambiguous"
     assert len(result["candidates"]) >= 2
+    candidate_ids = {c["session_id"] for c in result["candidates"]}
+    assert candidate_ids == {1, 2}
 
 
 # ---------------------------------------------------------------------------

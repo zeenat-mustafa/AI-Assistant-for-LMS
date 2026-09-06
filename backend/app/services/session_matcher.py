@@ -48,6 +48,75 @@ def _normalize_text(text: str) -> str:
 
 # ── 2. _title_similarity_score ────────────────────────────────────────────────
 
+def _tokenize_pairing_numbers(normalized_text: str) -> list[str]:
+    """
+    Split into word/number tokens, then merge each number into the word
+    immediately preceding it ("week", "8" -> "week8") so a title's numbers
+    stay tied to their role (week vs. day) instead of floating free in a
+    bag of words. A leading number with no preceding word stays standalone.
+    """
+    raw_tokens = re.findall(r"[a-z]+|[0-9]+", normalized_text)
+    merged: list[str] = []
+    i = 0
+    while i < len(raw_tokens):
+        token = raw_tokens[i]
+        if (
+            token.isalpha()
+            and i + 1 < len(raw_tokens)
+            and raw_tokens[i + 1].isdigit()
+        ):
+            merged.append(token + raw_tokens[i + 1])
+            i += 2
+        else:
+            merged.append(token)
+            i += 1
+    return merged
+
+
+_WORD_NUMBER_RE = re.compile(r"^([a-z]*)([0-9]*)$")
+
+
+def _split_word_number(token: str) -> tuple[str, str]:
+    """Every token from _tokenize_pairing_numbers is alpha, digits, or an
+    alpha prefix followed by digits — split it into those two parts."""
+    match = _WORD_NUMBER_RE.match(token)
+    if match:
+        return match.group(1), match.group(2)
+    return token, ""
+
+
+def _token_similarity(a: str, b: str) -> float:
+    """
+    Compare two tokens from _tokenize_pairing_numbers.
+
+    If both tokens carry a numeric part (a bare number, or the trailing
+    digits of a merged "word+number" token like "day1"), the numbers must
+    match EXACTLY or the pair scores 0 — regardless of how well the
+    surrounding word matches. Found via real dev-data testing: plain
+    character-level SequenceMatcher still gave "day1" vs "day2" a ~0.75
+    ratio (3 of 4 characters shared), which was enough to keep an unrelated
+    "Week 1 Day 1" / "Week 3 Day 1" inside the ambiguity margin against an
+    instruction asking for "Week 2 Day 1" — a single-digit difference is a
+    completely different week/day, not a "close" one, so it gets none of
+    the partial credit a word typo would.
+
+    Word-only tokens (no numeric part on either side) keep the existing
+    fuzzy SequenceMatcher behavior — typos/partial word matches are a real,
+    valid case there and are left alone.
+    """
+    a_word, a_num = _split_word_number(a)
+    b_word, b_num = _split_word_number(b)
+
+    if a_num and b_num:
+        if a_num != b_num:
+            return 0.0
+        if not a_word and not b_word:
+            return 1.0
+        return difflib.SequenceMatcher(None, a_word, b_word).ratio()
+
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
 def _title_similarity_score(instruction: str, session_title: str) -> float:
     """
     Measure how strongly session_title is referenced within instruction.
@@ -80,14 +149,29 @@ def _title_similarity_score(instruction: str, session_title: str) -> float:
     with a repeated word (e.g. "Week 1 Day 1", where "1" is both the week
     and day number) could have two different title words both match the
     same single instruction word, double-counting it.
+
+    A word immediately followed by a number is merged into one compound
+    token ("week"+"8" -> "week8") before matching — found via real dev-data
+    testing: plain word-level tokens treat the title as a bag of words, so
+    "Week 2 Day 1" and "Week 1 Day 2" both reduce to the same token set
+    {week, 1, day, 2} and score identically (1.0) against an instruction
+    naming either one, even though they're different sessions. Merging
+    ties each number to whatever word precedes it, so "week2"/"day1" can
+    no longer match "week1"/"day2" as exact hits — a swapped-number title
+    now scores meaningfully lower instead of tying with the correct one.
+
+    Numeric tokens are compared exact-match-or-nothing (see
+    _token_similarity), not via fuzzy character overlap — "day1" and "day2"
+    still share 3 of 4 characters, which was enough to keep an unrelated
+    same-day-different-week session inside the ambiguity margin.
     """
     normalized_instruction = _normalize_text(instruction)
     normalized_title = _normalize_text(session_title)
     if not normalized_title or not normalized_instruction:
         return 0.0
 
-    title_words = normalized_title.split()
-    instruction_words = normalized_instruction.split()
+    title_words = _tokenize_pairing_numbers(normalized_title)
+    instruction_words = _tokenize_pairing_numbers(normalized_instruction)
     if not title_words or not instruction_words:
         return 0.0
 
@@ -100,7 +184,7 @@ def _title_similarity_score(instruction: str, session_title: str) -> float:
         best_ii = 0
         for ti, tw in enumerate(remaining_title_words):
             for ii, iw in enumerate(remaining_instruction_words):
-                s = difflib.SequenceMatcher(None, tw, iw).ratio()
+                s = _token_similarity(tw, iw)
                 if s > best_score:
                     best_score = s
                     best_ti, best_ii = ti, ii
