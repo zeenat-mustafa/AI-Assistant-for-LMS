@@ -135,6 +135,7 @@ def grade_single_submission_file(db: Session, submission_file_id: int) -> dict[s
 def grade_session_batch(
     db: Session,
     session_id: int,
+    student_id: int | None = None,
 ) -> Generator[dict[str, Any], None, None]:
     """
     Generator that grades every ungraded SubmissionFile in a Session.
@@ -173,21 +174,28 @@ def grade_session_batch(
         Active SQLAlchemy session.
     session_id:
         PK of the LMSSession whose ungraded files should be processed.
+    student_id:
+        If given (Phase 3.3), only that student's ungraded SubmissionFiles
+        are processed — everyone else in the session is left untouched.
+        Default None preserves the exact original behavior: every ungraded
+        file in the session.
     """
     from app.models.submission import Submission
     from app.models.submission_file import SubmissionFile
 
     # ── Collect all ungraded SubmissionFile rows for this session ─────────────
-    ungraded_files: list[SubmissionFile] = (
+    query = (
         db.query(SubmissionFile)
         .join(Submission, SubmissionFile.submission_id == Submission.id)
         .filter(
             Submission.session_id == session_id,
             SubmissionFile.graded == False,  # noqa: E712 — SQLAlchemy requires ==
         )
-        .order_by(SubmissionFile.id)
-        .all()
     )
+    if student_id is not None:
+        query = query.filter(Submission.student_id == student_id)
+
+    ungraded_files: list[SubmissionFile] = query.order_by(SubmissionFile.id).all()
 
     total = len(ungraded_files)
 

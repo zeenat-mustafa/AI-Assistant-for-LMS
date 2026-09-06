@@ -28,6 +28,9 @@ class User(Base):
     submissions: Mapped[list["Submission"]] = relationship(  # noqa: F821
         "Submission", back_populates="student", cascade="all, delete-orphan"
     )
+    owned_sessions: Mapped[list["LMSSession"]] = relationship(  # noqa: F821
+        "LMSSession", back_populates="instructor"
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r} role={self.role}>"

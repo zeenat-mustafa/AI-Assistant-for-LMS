@@ -31,6 +31,7 @@ def _session_read(session: LMSSession) -> SessionRead:
     return SessionRead(
         id=session.id,
         title=session.title,
+        instructor_id=session.instructor_id,
         created_at=session.created_at,
         unsolved_files=[
             UnsolvedFileRead.from_orm_model(f) for f in session.unsolved_files
@@ -61,14 +62,21 @@ def create_session(
     db: Annotated[Session, Depends(get_db)],
     _instructor: Annotated[User, Depends(require_instructor)],
 ) -> SessionRead:
-    # Prevent duplicate titles — they're used for fuzzy matching.
-    existing = db.query(LMSSession).filter(LMSSession.title == body.title).first()
+    # Prevent duplicate titles for this instructor — they're used for fuzzy matching.
+    existing = (
+        db.query(LMSSession)
+        .filter(
+            LMSSession.title == body.title,
+            LMSSession.instructor_id == _instructor.id,
+        )
+        .first()
+    )
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"A session titled '{body.title}' already exists (id={existing.id}).",
         )
-    lms_session = LMSSession(title=body.title)
+    lms_session = LMSSession(title=body.title, instructor_id=_instructor.id)
     db.add(lms_session)
     db.commit()
     db.refresh(lms_session)

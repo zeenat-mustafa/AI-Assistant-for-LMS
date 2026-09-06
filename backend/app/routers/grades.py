@@ -44,6 +44,10 @@ def _get_total_assignment_count(session_id: int, db: Session) -> int:
     return db.query(UnsolvedFile).filter(UnsolvedFile.session_id == session_id).count()
 
 
+def _round_to_half(value: float) -> float:
+    return round(value * 2) / 2
+
+
 def _build_grade_summary(
     student: User,
     submission: Submission | None,
@@ -70,7 +74,7 @@ def _build_grade_summary(
     combined: float | None = None
     if total_assignment_files > 0:
         combined = sum(g.score for g in per_file) / total_assignment_files
-        combined = round(combined, 2)
+        combined = _round_to_half(combined)
 
     return GradeSummary(
         student_id=student.id,

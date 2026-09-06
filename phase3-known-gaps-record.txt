@@ -1,0 +1,20 @@
+Phase 3 — Known Gaps Record
+============================
+Gaps accepted by design during Phase 3 sub-features. Not bugs — do not "fix"
+without being asked. See CLAUDE.md's "Known gaps" section for the Phase 1/2
+equivalents.
+
+Sub-feature 3.2 (instruction_filter.py — student/scope filter parsing)
+------------------------------------------------------------------------
+- Name/common-word collision: a student whose real name happens to be an
+  ordinary English word (e.g. "Grace", "Will", "Mark", "Faith") can
+  false-positive match on a coincidental appearance of that word in an
+  unrelated sentence, returning {"scope": "student", ...} instead of
+  {"scope": "all"}. Unlike other misses, nothing catches this — it isn't
+  routed to "ambiguous" or "not_found", it just silently narrows to the
+  wrong (or an accidental) student. Root cause: name-like-token detection
+  is a stopword-list heuristic (plus per-call exclusion of the session's
+  own title words), not real name-entity recognition, so it can't tell a
+  common word used as an ordinary word apart from that same word used as
+  someone's actual first name. No fix planned — flagged for awareness
+  before this ships against a real course roster with common-word names.
