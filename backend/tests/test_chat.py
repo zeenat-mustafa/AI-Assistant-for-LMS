@@ -43,6 +43,7 @@ from app.models.submission_file import SubmissionFile
 from app.models.unsolved_file import UnsolvedFile
 from app.models.user import User, UserRole
 from app.services.auth import create_access_token
+from app.services.chat_response_formatter import build_response_message
 
 
 def _rubric_json() -> str:
@@ -190,7 +191,15 @@ def test_ambiguous_session(api_client):
         )
     assert res.status_code == 200
     body = res.json()
-    assert body == {"status": "ambiguous_session", "candidates": candidates}
+    # Exact-match still, now including 3.5's conversational message. The
+    # expected message is computed from the formatter (whose own wording is
+    # pinned in test_chat_response_formatter.py), so this asserts the
+    # endpoint passed the right context — not just that some string exists.
+    assert body == {
+        "status": "ambiguous_session",
+        "candidates": candidates,
+        "message": build_response_message("ambiguous_session", candidates=candidates),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +218,11 @@ def test_student_not_found(api_client):
             _ENDPOINT, json={"instruction": "grade Xavier's file"}, headers=_auth(instructor_token)
         )
     assert res.status_code == 200
-    assert res.json() == {"status": "student_not_found", "attempted_name": "Xavier"}
+    assert res.json() == {
+        "status": "student_not_found",
+        "attempted_name": "Xavier",
+        "message": build_response_message("student_not_found", attempted_name="Xavier"),
+    }
 
 
 def test_ambiguous_student(api_client):
@@ -234,6 +247,7 @@ def test_ambiguous_student(api_client):
         "session_id": 10,
         "session_title": "DS101",
         "candidates": candidates,
+        "message": build_response_message("ambiguous_student", candidates=candidates),
     }
 
 
@@ -254,6 +268,9 @@ def test_unsupported_filter(api_client):
     assert res.json() == {
         "status": "unsupported_filter",
         "reason": "exclusionary filters not yet supported",
+        "message": build_response_message(
+            "unsupported_filter", reason="exclusionary filters not yet supported"
+        ),
     }
 
 
@@ -359,6 +376,26 @@ def _fake_grade_session_batch(db, session_id, student_id=None):
     yield {"event": "summary", "total": 1, "graded": 1, "failed": 0, "failures": []}
 
 
+def _fake_grade_session_batch_with_failure(db, session_id, student_id=None):
+    """3 files: 2 graded, 1 failed — exercises the summary message's counts."""
+    yield {"event": "checking", "student_id": 2, "filename": "hw1.ipynb"}
+    yield {"event": "graded", "student_id": 2, "filename": "hw1.ipynb", "score": 8.5}
+    yield {"event": "checking", "student_id": 2, "filename": "hw2.ipynb"}
+    yield {"event": "graded", "student_id": 2, "filename": "hw2.ipynb", "score": 7.0}
+    yield {"event": "checking", "student_id": 3, "filename": "hw3.ipynb"}
+    yield {
+        "event": "failed", "student_id": 3, "filename": "hw3.ipynb",
+        "error": "not matched to an assignment",
+    }
+    yield {
+        "event": "summary", "total": 3, "graded": 2, "failed": 1,
+        "failures": [{
+            "student_id": 3, "filename": "hw3.ipynb",
+            "error": "not matched to an assignment",
+        }],
+    }
+
+
 def test_stream_early_exit_produces_one_event(api_client):
     c, instructor_token, *_ = api_client
     early_exit = {"status": "ambiguous_session", "candidates": [
@@ -373,7 +410,12 @@ def test_stream_early_exit_produces_one_event(api_client):
     assert res.status_code == 200
     assert res.headers["content-type"].startswith("text/event-stream")
     events = _parse_sse_events(res.text)
-    assert events == [early_exit]
+    assert events == [{
+        **early_exit,
+        "message": build_response_message(
+            "ambiguous_session", candidates=early_exit["candidates"]
+        ),
+    }]
 
 
 def test_stream_resolved_streams_events_in_order(api_client):
@@ -394,7 +436,75 @@ def test_stream_resolved_streams_events_in_order(api_client):
     assert res.status_code == 200
     events = _parse_sse_events(res.text)
     assert [e["event"] for e in events] == ["checking", "graded", "summary"]
-    assert events[-1] == {"event": "summary", "total": 1, "graded": 1, "failed": 0, "failures": []}
+    raw_summary = {"event": "summary", "total": 1, "graded": 1, "failed": 0, "failures": []}
+    assert events[-1] == {
+        **raw_summary,
+        "message": build_response_message(
+            "graded",
+            session_title="DS101",
+            scope="all",
+            student_name=None,
+            summary=raw_summary,
+        ),
+    }
+
+
+def test_chat_graded_message_reflects_real_counts(api_client):
+    """/chat's graded response carries a message built from the real
+    total/graded/failed the pipeline actually produced (3.5)."""
+    c, instructor_token, *_ = api_client
+    with patch(
+        "app.routers.chat.match_instruction_to_session", return_value=_MATCHED_SESSION
+    ), patch(
+        "app.routers.chat.parse_grading_filter", return_value={"scope": "all"}
+    ), patch(
+        "app.services.grading_pipeline.grade_session_batch",
+        _fake_grade_session_batch_with_failure,
+    ):
+        res = c.post(
+            _ENDPOINT, json={"instruction": "grade ds101"}, headers=_auth(instructor_token)
+        )
+
+    assert res.status_code == 200
+    body = res.json()
+    # Structured data unchanged by 3.5 ...
+    assert body["summary"]["total"] == 3
+    assert body["summary"]["graded"] == 2
+    assert body["summary"]["failed"] == 1
+    # ... and the message reflects those same real numbers.
+    assert body["message"] == (
+        "Graded 2 of 3 submissions in DS101. 1 failed — see the details below."
+    )
+
+
+def test_stream_message_only_on_final_summary_event(api_client):
+    """Intermediate checking/graded/failed events stream through untouched;
+    only the final summary event gets the conversational message (3.5)."""
+    c, instructor_token, *_ = api_client
+    resolution = {
+        "resolved": True, "session_id": 10, "session_title": "DS101",
+        "student_id": None, "student_name": None,
+    }
+    with patch(
+        "app.routers.chat._resolve_chat_instruction", return_value=resolution
+    ), patch(
+        "app.services.grading_pipeline.grade_session_batch",
+        _fake_grade_session_batch_with_failure,
+    ):
+        res = c.post(
+            _STREAM_ENDPOINT, json={"instruction": "grade ds101"}, headers=_auth(instructor_token)
+        )
+
+    assert res.status_code == 200
+    events = _parse_sse_events(res.text)
+    assert events[-1]["event"] == "summary"
+
+    for event in events[:-1]:
+        assert "message" not in event, f"non-summary event carried a message: {event}"
+
+    assert events[-1]["message"] == (
+        "Graded 2 of 3 submissions in DS101. 1 failed — see the details below."
+    )
 
 
 def test_stream_non_instructor_returns_403(api_client):

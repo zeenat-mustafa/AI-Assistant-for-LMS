@@ -18,15 +18,19 @@ actual non-instructor access; 422 for a malformed request body (missing
 /chat/stream carries the same outcomes but framed as SSE events instead of
 one JSON blob (see its own docstring below).
 
+Every response also carries a short human-readable "message" (3.5), built by
+chat_response_formatter — purely additive prose alongside the structured
+fields, which are unchanged and still carry the full detail.
+
 Response shapes (one per "status" value)
 ─────────────────────────────────────────
     {"status": "no_session_match", "message": str}
-    {"status": "ambiguous_session", "candidates": [{"session_id", "session_title", "confidence"}, ...]}
-    {"status": "student_not_found", "attempted_name": str}
-    {"status": "ambiguous_student", "session_id", "session_title",
+    {"status": "ambiguous_session", "message", "candidates": [{"session_id", "session_title", "confidence"}, ...]}
+    {"status": "student_not_found", "message", "attempted_name": str}
+    {"status": "ambiguous_student", "message", "session_id", "session_title",
      "candidates": [{"student_id", "student_name"}, ...]}
-    {"status": "unsupported_filter", "reason": str}
-    {"status": "graded", "session_id", "session_title", "scope": "all" | "student",
+    {"status": "unsupported_filter", "message", "reason": str}
+    {"status": "graded", "message", "session_id", "session_title", "scope": "all" | "student",
      "student_name": str (only when scope == "student"),
      "events": [...], "summary": {...}}
 """
@@ -42,6 +46,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
 from app.services.auth import require_instructor
+from app.services.chat_response_formatter import build_response_message
 from app.services.instruction_filter import parse_grading_filter
 from app.services.session_matcher import match_instruction_to_session
 
@@ -122,6 +127,20 @@ def _resolve_chat_instruction(instruction: str, current_user: User, db: Session)
     }
 
 
+def _with_message(payload: dict) -> dict:
+    """
+    Return *payload* plus its conversational "message" (3.5).
+
+    Kept at the endpoint level rather than inside _resolve_chat_instruction
+    so that helper's return shape stays exactly as 3.4 left it — the
+    resolver still decides the outcome, the endpoints own the prose. Any
+    "message" already present is replaced, so the formatter is the single
+    source of that wording.
+    """
+    context = {k: v for k, v in payload.items() if k != "status"}
+    return {**payload, "message": build_response_message(payload["status"], **context)}
+
+
 @router.post(
     "",
     status_code=status.HTTP_200_OK,
@@ -139,7 +158,7 @@ def chat(
     """
     resolution = _resolve_chat_instruction(body.instruction, instructor, db)
     if not resolution.get("resolved"):
-        return resolution
+        return _with_message(resolution)
 
     from app.services.grading_pipeline import grade_session_batch
 
@@ -163,7 +182,7 @@ def chat(
     if scope == "student":
         response["student_name"] = resolution["student_name"]
 
-    return response
+    return _with_message(response)
 
 
 @router.post(
@@ -186,20 +205,38 @@ def chat_stream(
         naturally on the generator's final "summary" event — the generator
         is consumed incrementally here, never drained into a list first.
 
+    The conversational "message" (3.5) is attached to the single early-exit
+    event, or to the final "summary" event only — intermediate
+    checking/graded/failed events stream through untouched, and
+    grade_session_batch itself knows nothing about messages.
+
     Each SSE event is framed as ``f"data: {json.dumps(event)}\\n\\n"``.
     """
 
     def event_stream():
         resolution = _resolve_chat_instruction(body.instruction, instructor, db)
         if not resolution.get("resolved"):
-            yield f"data: {json.dumps(resolution)}\n\n"
+            yield f"data: {json.dumps(_with_message(resolution))}\n\n"
             return
 
         from app.services.grading_pipeline import grade_session_batch
 
+        scope = "student" if resolution["student_id"] is not None else "all"
+
         for event in grade_session_batch(
             db, resolution["session_id"], student_id=resolution["student_id"]
         ):
+            if event.get("event") == "summary":
+                event = {
+                    **event,
+                    "message": build_response_message(
+                        "graded",
+                        session_title=resolution["session_title"],
+                        scope=scope,
+                        student_name=resolution["student_name"],
+                        summary=event,
+                    ),
+                }
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
