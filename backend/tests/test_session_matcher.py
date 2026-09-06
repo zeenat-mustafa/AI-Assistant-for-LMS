@@ -143,6 +143,30 @@ def test_ambiguous_two_similar_sessions(db):
     assert confidences == sorted(confidences, reverse=True)
 
 
+def test_ambiguous_candidates_never_a_single_item_list(db):
+    """
+    Regression test: found via real dev-DB verification during 3.3.
+    "grade week 10" against real titles ("Week 10 Day 3", "Week 1 Day 1",
+    "Week 3 Day 1", ...) scored the top session at 0.5625 with every other
+    candidate below SESSION_MATCH_THRESHOLD (0.55) but within
+    CLEAR_WINNER_MARGIN (0.15) of the top score — not a clear winner, but
+    filtering the "ambiguous" candidate list to only entries >= 0.55 left
+    exactly one entry, a nonsensical "ambiguous, pick one of: just this one"
+    response. The candidate list must include every entry within margin of
+    the best score, regardless of whether each one individually clears
+    SESSION_MATCH_THRESHOLD, so "ambiguous" always means 2+ real candidates.
+    """
+    instructor = _make_instructor(db, user_id=1)
+    _make_session(db, session_id=1, title="Week 10 Day 3", instructor_id=instructor.id)
+    _make_session(db, session_id=2, title="Week 1 Day 1", instructor_id=instructor.id)
+    _make_session(db, session_id=3, title="Week 3 Day 1", instructor_id=instructor.id)
+
+    result = match_instruction_to_session("grade week 10", instructor.id, db)
+
+    assert result["status"] == "ambiguous"
+    assert len(result["candidates"]) >= 2
+
+
 # ---------------------------------------------------------------------------
 # 4. No match
 # ---------------------------------------------------------------------------

@@ -255,8 +255,17 @@ def match_instruction_to_session(
                 "confidence": best["confidence"],
             }
 
-        # Two or more above threshold, no clear winner — collect every
-        # candidate above threshold, sorted by confidence descending.
+        # No clear winner — collect every candidate within CLEAR_WINNER_MARGIN
+        # of the best score (not just those individually above threshold):
+        # "not a clear winner" was decided by comparing best against the
+        # single next-best score, so that runner-up — even if it happens to
+        # sit just under SESSION_MATCH_THRESHOLD itself — is exactly why we
+        # aren't confident, and must appear in the candidate list. Filtering
+        # by SESSION_MATCH_THRESHOLD here instead can produce a nonsensical
+        # single-item "ambiguous" list when the runner-up is close but
+        # sub-threshold (seen on real data: "grade week 10" scored Week 10
+        # Day 3 at 0.5625 with no other candidate above 0.55, so the old
+        # threshold filter left only one entry despite reporting "ambiguous").
         candidates = [
             {
                 "session_id": entry["session"].id,
@@ -264,7 +273,7 @@ def match_instruction_to_session(
                 "confidence": entry["confidence"],
             }
             for entry in scored
-            if entry["confidence"] >= SESSION_MATCH_THRESHOLD
+            if best["confidence"] - entry["confidence"] <= CLEAR_WINNER_MARGIN
         ][:MAX_AMBIGUOUS_CANDIDATES]
         return {"status": "ambiguous", "candidates": candidates}
 
