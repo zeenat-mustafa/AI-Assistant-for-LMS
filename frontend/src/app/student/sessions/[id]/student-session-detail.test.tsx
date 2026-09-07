@@ -20,6 +20,9 @@ vi.mock("next/navigation", () => ({
 const getSessionMock = vi.fn();
 const getMySubmissionMock = vi.fn();
 const downloadAssignmentMock = vi.fn();
+// 5.6 added the grades panel to this page; it must resolve, or its own error
+// banner becomes a second role="alert" and these assertions turn ambiguous.
+const getMyGradesMock = vi.fn();
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
@@ -27,6 +30,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     getSession: (...a: unknown[]) => getSessionMock(...a),
     getMySubmission: (...a: unknown[]) => getMySubmissionMock(...a),
     downloadAssignment: (...a: unknown[]) => downloadAssignmentMock(...a),
+    getMyGrades: (...a: unknown[]) => getMyGradesMock(...a),
   };
 });
 
@@ -105,6 +109,12 @@ beforeEach(() => {
   currentUser = STUDENT;
   getSessionMock.mockResolvedValue(sessionWith([file()]));
   getMySubmissionMock.mockResolvedValue(null);
+  getMyGradesMock.mockResolvedValue({
+    student_id: 2,
+    student_name: "Demo Student",
+    per_file: [],
+    combined_score: 0,
+  });
 });
 
 describe("<StudentSessionDetail /> — session and assignment files", () => {
@@ -156,10 +166,12 @@ describe("<StudentSessionDetail /> — session and assignment files", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("File not found on disk.");
   });
 
-  it("builds no upload UI (that is 5.6)", async () => {
+  it("now offers the 5.6 upload control", async () => {
+    // This asserted the ABSENCE of upload UI while 5.6 was still unbuilt.
+    // 5.6 is what it was guarding against, so it now checks the opposite.
     await renderDetail();
-    expect(screen.queryByRole("button", { name: /^upload/i })).not.toBeInTheDocument();
-    expect(document.querySelector('input[type="file"]')).toBeNull();
+    expect(screen.getByLabelText("Your solved file")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^upload$/i })).toBeInTheDocument();
   });
 });
 
@@ -201,10 +213,12 @@ describe("<StudentSessionDetail /> — submission status", () => {
     expect(screen.queryByText(/haven't submitted/i)).not.toBeInTheDocument();
   });
 
-  it("shows no scores — grades are 5.6", async () => {
+  it("renders the 5.6 grades panel alongside the submission status", async () => {
     getMySubmissionMock.mockResolvedValue(submission());
     await renderDetail();
-    expect(screen.queryByText(/\/ 10/)).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Your grade" })).toBeInTheDocument();
+    // Nothing graded in this fixture, so no score is shown.
+    expect(screen.getByText(/hasn't been graded yet/i)).toBeInTheDocument();
   });
 
   it("surfaces a real submission-status failure as an error", async () => {

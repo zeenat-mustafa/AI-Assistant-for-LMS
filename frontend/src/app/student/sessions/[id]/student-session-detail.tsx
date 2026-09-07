@@ -1,22 +1,36 @@
 "use client";
 
 /**
- * Student's view of one session: its assignment files (downloadable) and
- * their own submission status.
- *
- * No upload UI here — that is 5.6. No scores either: this shows whether a
- * file has been graded, not what it scored, which is 5.6's job.
+ * Student's view of one session: submission status, upload, own grades, and
+ * the session's downloadable assignment files.
  *
  * Every endpoint used is gated on `get_current_user`, not `require_instructor`,
  * so 5.3's authenticated blob-download helper works unchanged with a student
  * token — verified, not assumed.
+ *
+ * Upload and grades live on this one page on purpose: /grades/mine is
+ * per-session, and an upload can destroy the grades shown here, so the two
+ * have to stay in step. See submission-upload-panel.tsx and my-grades-panel.tsx.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
-import { ApiError, downloadAssignment, getMySubmission, getSession } from "@/lib/api";
-import type { SessionRead, SubmissionRead, UnsolvedFileRead } from "@/lib/api";
+import {
+  ApiError,
+  downloadAssignment,
+  getMyGrades,
+  getMySubmission,
+  getSession,
+} from "@/lib/api";
+import type {
+  GradeSummary,
+  SessionRead,
+  SubmissionRead,
+  UnsolvedFileRead,
+} from "@/lib/api";
+import { MyGradesPanel } from "./my-grades-panel";
+import { SubmissionUploadPanel } from "./submission-upload-panel";
 import { RequireAuth } from "@/components/require-auth";
 import { SignedInShell } from "@/components/signed-in-shell";
 import { EmptyState, FormError, Loading, Panel, SmallButton } from "@/components/ui";
@@ -64,6 +78,19 @@ async function loadMySubmission(
   }
 }
 
+/** Same discard-if-stale shape as the loaders above. */
+async function loadMyGrades(
+  sessionId: number,
+): Promise<{ grades: GradeSummary } | { error: string }> {
+  try {
+    return { grades: await getMyGrades(sessionId) };
+  } catch (error) {
+    return {
+      error: error instanceof ApiError ? error.detail : "Could not load your grade.",
+    };
+  }
+}
+
 function StudentSessionBody({ sessionId }: { sessionId: number }) {
   const [session, setSession] = useState<SessionRead | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -71,6 +98,23 @@ function StudentSessionBody({ sessionId }: { sessionId: number }) {
   // `undefined` = still loading; `null` = loaded, nothing submitted.
   const [submission, setSubmission] = useState<SubmissionRead | null | undefined>(undefined);
   const [submissionError, setSubmissionError] = useState<string | null>(null);
+
+  const [grades, setGrades] = useState<GradeSummary | undefined>(undefined);
+  const [gradesError, setGradesError] = useState<string | null>(null);
+
+  /**
+   * Re-read grades. Called on mount and after an upload -- a replacement
+   * deletes the previous grades, so the old display must not linger.
+   */
+  const refreshGrades = useCallback(async () => {
+    const result = await loadMyGrades(sessionId);
+    if ("error" in result) {
+      setGradesError(result.error);
+      return;
+    }
+    setGrades(result.grades);
+    setGradesError(null);
+  }, [sessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -105,6 +149,22 @@ function StudentSessionBody({ sessionId }: { sessionId: number }) {
     };
   }, [sessionId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void loadMyGrades(sessionId).then((result) => {
+      if (cancelled) return;
+      if ("error" in result) {
+        setGradesError(result.error);
+        return;
+      }
+      setGrades(result.grades);
+      setGradesError(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
   if (loadError) {
     return (
       <>
@@ -129,6 +189,26 @@ function StudentSessionBody({ sessionId }: { sessionId: number }) {
       <SubmissionStatusPanel
         submission={submission}
         error={submissionError}
+      />
+
+      <SubmissionUploadPanel
+        sessionId={sessionId}
+        submission={submission}
+        grades={grades}
+        onUploaded={(created) => {
+          // The replacement already deleted any previous grades, so clear the
+          // stale display immediately, then re-read the real state.
+          setSubmission(created);
+          setGrades(undefined);
+          void refreshGrades();
+        }}
+      />
+
+      <MyGradesPanel
+        grades={grades}
+        error={gradesError}
+        submission={submission}
+        totalAssignmentFiles={session.unsolved_files.length}
       />
 
       <AssignmentFilesPanel sessionId={sessionId} files={session.unsolved_files} />

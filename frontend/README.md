@@ -88,7 +88,7 @@ for await (const event of streamChat("grade week 3 day 1")) {
 | `/instructor` | instructors | Create a session; list the ones you own (5.3). |
 | `/instructor/sessions/[id]` | instructors | Assignment files (5.3), plus the grade roster and grading chat (5.4). |
 | `/student` | students | Every session in the system, with an enrolment caveat (5.5). |
-| `/student/sessions/[id]` | students | Assignment downloads and own submission status (5.5). |
+| `/student/sessions/[id]` | students | Assignment downloads and submission status (5.5); submission upload and own grades (5.6). |
 
 The dynamic route's `page.tsx` is a Server Component whose only job is to
 `await props.params` (typed with the generated `PageProps<'/instructor/sessions/[id]'>`)
@@ -132,7 +132,20 @@ fetching need the browser, but parsing the segment does not.
   grades.** `upload_submission` deletes the old `Submission` and its
   `SubmissionFile` rows; `Grade` cascades from `SubmissionFile` both via
   the ORM relationship and the FK. This is not the assignment side's
-  atomic-409 behaviour. 5.6's upload UI has to warn about it.
+  atomic-409 behaviour.
+
+  The upload UI responds by naming the exact score that will be destroyed
+  and requiring a second, explicit click before it calls the endpoint.
+  That is a guardrail, not protection: the endpoint is unchanged and still
+  replaces-and-deletes for any caller (Swagger, curl, MCP), and the
+  student can click through the confirm. It makes the cost visible and
+  asks for consent — nothing more. Blocking re-upload outright was
+  rejected because there is no delete-submission endpoint, so a hard block
+  would strand a student who uploaded the wrong file once it was graded.
+- **`GET .../grades/mine` returns the structured `rationale` too**, but
+  the student UI renders only `feedback_text`. The structured breakdown is
+  reserved for the Extended-Goals "why this grade" chatbot. This is a
+  display choice, not confidentiality — the data is already on the wire.
 
 **Guarding is client-side, per page, via `<RequireAuth>`.** Next 16 renamed
 Middleware to `proxy.ts`, but it runs on the server and can only read

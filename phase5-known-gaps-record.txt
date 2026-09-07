@@ -10,6 +10,45 @@ below are backend limitations the frontend SURFACES rather than works around —
 that is deliberate. Where the UI narrows or hides something, it is said so
 explicitly, because hiding is not enforcing.
 
+Sub-feature 5.6 (student submission upload + own grades)
+------------------------------------------------------------------------
+- NO SUBMISSION-DEADLINE CONCEPT EXISTS ANYWHERE. Not in the schema, not
+  in the routers, not in the project spec. A student can therefore replace
+  a submission at any time — including long after an instructor has
+  reviewed and graded it — and, per the replace-and-delete behaviour
+  recorded under 5.5, doing so destroys the existing grade and its
+  feedback.
+
+  Nothing was built around this in Phase 5: no deadline logic, no
+  countdown, no time-based restriction, not even a cosmetic one, because
+  a client-side deadline would imply an enforcement the backend does not
+  have. Flagged as a real limitation for future consideration (Extended
+  Goals or Phase 6), where it would need a deadline column on the session
+  plus a server-side check in upload_submission.
+
+- THE RE-UPLOAD CONFIRM IS A UX GUARDRAIL, NOT PROTECTION. When a student
+  re-uploads over a graded submission, the UI names the exact score that
+  will be destroyed and requires an explicit second click before the
+  upload call is made. That is all it is: the endpoint is unchanged and
+  still replaces-and-deletes for any caller — Swagger, curl, the MCP
+  surface, or any future client — and the student can click through the
+  confirm themselves. It makes the cost visible and asks for consent; it
+  does not prevent anything.
+
+  Blocking re-upload entirely was considered and rejected: there is no
+  delete-submission endpoint, so a hard block would strand a student who
+  uploaded the wrong file once it had been graded, with no way to correct
+  it from the app.
+
+- THE STRUCTURED RATIONALE IS RETURNED TO STUDENTS BUT NOT DISPLAYED.
+  GET /sessions/{id}/grades/mine returns GradeRead.rationale — the full
+  criterion-by-criterion breakdown parsed from rationale_json — alongside
+  the human-readable feedback_text. The student UI deliberately renders
+  only feedback_text; the structured rationale is reserved for the
+  Extended-Goals "why this grade" chatbot. Note this is a display choice
+  only: the data is already on the wire and visible in devtools or via a
+  direct API call, so it is not confidential.
+
 Sub-feature 5.5 (student session list + assignment downloads)
 ------------------------------------------------------------------------
 - RE-UPLOADING A SUBMISSION REPLACES IT AND DESTROYS ITS GRADES. This is
