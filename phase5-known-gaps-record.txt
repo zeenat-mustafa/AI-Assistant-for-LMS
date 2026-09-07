@@ -1,0 +1,116 @@
+Phase 5 — Known Gaps Record
+============================
+Gaps accepted by design during Phase 5 (Next.js frontend) sub-features. Not
+bugs — do not "fix" without being asked. See CLAUDE.md's "Known gaps" section
+for the Phase 1/2 equivalents, phase3-known-gaps-record.txt for Phase 3's, and
+phase4-known-gaps-record.txt for Phase 4's.
+
+Note on scope: Phase 5 is a thin UI over the existing API. Several entries
+below are backend limitations the frontend SURFACES rather than works around —
+that is deliberate. Where the UI narrows or hides something, it is said so
+explicitly, because hiding is not enforcing.
+
+Sub-feature 5.3 (instructor session + assignment file management)
+------------------------------------------------------------------------
+- GET /sessions HAS NO OWNER FILTER, SO THE OWNERSHIP NARROWING IS
+  CLIENT-SIDE AND BREAKS PAST ONE PAGE. The endpoint is literally
+  "List all sessions" (backend/app/routers/sessions.py::list_sessions):
+  it takes no instructor_id, applies no filter, and is gated on
+  get_current_user rather than require_instructor — so any authenticated
+  user, student included, can read every instructor's session list.
+
+  The instructor dashboard therefore fetches one page and filters on
+  `instructor_id === user.id` in the browser
+  (frontend/src/app/instructor/instructor-dashboard.tsx::loadOwnSessions).
+
+  Practical effect: the page requests limit=200, the backend's maximum.
+  Below 200 TOTAL sessions across ALL instructors the filtered list is
+  correct. Above that, sessions belonging to this instructor can sit
+  beyond the fetched page and silently vanish from their dashboard —
+  filtering a page after the fact cannot see what the page did not
+  contain. `SessionList.total` is the unfiltered count for every
+  instructor, so it is deliberately never displayed anywhere in the UI.
+
+  This also means the narrowing is cosmetic, not access control: another
+  instructor's session is still readable through the API, and typing its
+  id into /instructor/sessions/<id> will load it (see the next entry).
+
+  DECISION (deferred, deliberately): not fixed in Phase 5, because the
+  fix belongs in the backend (an instructor_id filter on list_sessions,
+  and an ownership check on the session detail/delete routes), and Phase
+  5's prompts scope the backend as off-limits. Only one instructor is
+  seeded, so the demo never exercises it. Revisit if a second instructor
+  account is ever added, or in Phase 6 if multi-instructor is demoed.
+
+- NO OWNERSHIP CHECKS ON SESSION DETAIL OR DELETE. GET /sessions/{id}
+  requires only get_current_user, and DELETE /sessions/{id} requires only
+  require_instructor — neither verifies the session belongs to the
+  caller. So any instructor can read or delete any instructor's session,
+  and any student can read one. Pre-existing backend behaviour, unchanged
+  and unmasked by Phase 5; recorded here because 5.3 is the first thing
+  to put a UI on those routes.
+
+- ASSIGNMENT UPLOAD IS ATOMIC PER BATCH, AND THE UI SAYS SO RATHER THAN
+  RETRYING. The backend checks every filename in a request against the
+  session before persisting anything, so a single duplicate name rejects
+  the whole upload with 409 — including files in the same batch that
+  would have been accepted on their own. Verified live in 5.3: a batch of
+  one brand-new filename plus one duplicate wrote neither.
+
+  The UI appends "(nothing was uploaded)" to the backend's message
+  instead of splitting the batch and retrying the survivors. Splitting
+  would silently produce a partial upload the instructor did not ask
+  for, and would hide the name collision they need to resolve.
+
+- REMOVE HAS NO UNDO. DELETE /sessions/{id}/assignments/{file_id} is
+  immediate and permanent (row + file on disk). The UI requires a second
+  click to confirm, which is the whole of the protection.
+
+Sub-feature 5.2 (auth pages and protected routing)
+------------------------------------------------------------------------
+- THE ROUTE GUARD IS UX, NOT SECURITY. <RequireAuth> runs in the browser
+  and can only hide UI. Enforcement remains entirely in the backend,
+  where every protected endpoint requires the Bearer token. This is not
+  a shortcut that could be closed client-side: the JWT lives in
+  localStorage, so proxy.ts (Next 16's renamed Middleware) cannot see it
+  — it runs on the server and reads cookies — and the Next docs limit
+  Proxy to optimistic checks rather than authorization anyway.
+
+- NO INSTRUCTOR REGISTRATION PATH, BY BACKEND DESIGN. POST /auth/register
+  is public and hardcodes UserRole.student; the role cannot be set by the
+  caller. Instructors are seeded by the backend. The UI has no role
+  selector for that reason — this is correct behaviour, not a missing
+  screen.
+
+- THE 8-CHARACTER PASSWORD MINIMUM IS CLIENT-SIDE ONLY. The backend's
+  UserRegister schema imposes no password rules at all, so the rule can
+  be bypassed by calling the API directly. It is a UX guard, not policy.
+
+Sub-feature 5.1 (scaffold + typed API client)
+------------------------------------------------------------------------
+- THE JWT IS IN localStorage, WHICH IS SCRIPT-READABLE. A successful XSS
+  could steal it; an httpOnly cookie could not be read by script. Chosen
+  knowingly: the backend authenticates with a plain Bearer JWT and has no
+  cookie or CSRF handling whatsoever, so switching would require backend
+  changes. Acceptable for a local capstone demo, not for deployment.
+
+- NO TOKEN-EXPIRY OR REFRESH HANDLING. Tokens last 8 hours
+  (access_token_expire_minutes=480) and there is no refresh flow. The
+  session resolver treats a 401 from GET /auth/me as "anonymous" and
+  clears the stale token, so an expired session degrades to a redirect to
+  /login rather than a broken page — but an expiry that happens mid-page
+  surfaces as a failed request, not a proactive sign-out. Matches the
+  Phase 3 gap about SSE connections having no token-refresh handling.
+
+- THE TYPED CLIENT MIRRORS THE BACKEND SCHEMAS BY HAND. Nothing generates
+  or verifies frontend/src/lib/api/types.ts against the Pydantic schemas;
+  a backend schema change will not fail the frontend build. The parity
+  risk is real but small at this scope, and an OpenAPI codegen step was
+  judged more machinery than a thin UI warrants. If drift ever bites,
+  generating from the FastAPI /openapi.json is the natural fix.
+
+- TWO BACKEND RETURN SHAPES ARE LEFT UNTYPED ON PURPOSE.
+  generate-rubric and the single-file grade endpoint both return plain
+  dicts rather than Pydantic models on the backend, so the client types
+  them as Record<string, unknown> instead of inventing a shape that
+  nothing guarantees.

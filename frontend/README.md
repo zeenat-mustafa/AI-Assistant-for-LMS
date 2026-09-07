@@ -85,8 +85,28 @@ for await (const event of streamChat("grade week 3 day 1")) {
 | `/` | anyone | Redirects to the caller's role home, or `/login`. |
 | `/login` | anyone | One form for both roles — the backend has no role field on login. |
 | `/register` | anyone | Student self-registration. `POST /auth/register` always creates a `student`, so there is deliberately no instructor sign-up. |
-| `/instructor` | instructors | Placeholder until 5.3-5.6. |
-| `/student` | students | Placeholder until 5.3-5.6. |
+| `/instructor` | instructors | Create a session; list the ones you own (5.3). |
+| `/instructor/sessions/[id]` | instructors | Upload, list, download and remove assignment files (5.3). |
+| `/student` | students | Placeholder until 5.5-5.6. |
+
+The dynamic route's `page.tsx` is a Server Component whose only job is to
+`await props.params` (typed with the generated `PageProps<'/instructor/sessions/[id]'>`)
+and hand the numeric id to a client component — the guard and all data
+fetching need the browser, but parsing the segment does not.
+
+### Two backend behaviours the UI has to work around
+
+- **`GET /sessions` has no owner filter.** It is literally "List all
+  sessions" and is open to any authenticated user, so the dashboard narrows
+  to `instructor_id === user.id` on the client. That narrowing is applied to
+  one page of results (`limit=200`, the backend maximum), which is correct at
+  demo scale but would drop sessions past the first page if the data ever
+  grew. `SessionList.total` counts every instructor's sessions, so it is
+  deliberately never displayed.
+- **Assignment upload is atomic per batch.** The backend checks every
+  filename in the request before writing anything, so one duplicate name
+  rejects the whole upload — including files that would otherwise have been
+  fine. The error message says "nothing was uploaded" for that reason.
 
 **Guarding is client-side, per page, via `<RequireAuth>`.** Next 16 renamed
 Middleware to `proxy.ts`, but it runs on the server and can only read

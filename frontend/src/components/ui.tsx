@@ -77,6 +77,56 @@ export function FormNotice({ children }: { children: ReactNode }) {
   );
 }
 
+/** Section container used by the instructor pages. */
+export function Panel({ title, description, children }: {
+  title: string;
+  description?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-6">
+      <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+      {description ? <p className="mt-1 text-sm text-slate-500">{description}</p> : null}
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+/** Shown in place of a list that has loaded but has nothing in it. */
+export function EmptyState({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-lg border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-slate-500">
+      {children}
+    </p>
+  );
+}
+
+export function Loading({ children = "Loading…" }: { children?: ReactNode }) {
+  return (
+    <p role="status" className="py-4 text-sm text-slate-500">
+      {children}
+    </p>
+  );
+}
+
+/** Small neutral/secondary button (download, delete, cancel). */
+export function SmallButton({
+  tone = "neutral",
+  ...props
+}: { tone?: "neutral" | "danger" } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  const toneClasses =
+    tone === "danger"
+      ? "border-red-300 text-red-700 hover:bg-red-50"
+      : "border-slate-300 text-slate-700 hover:bg-slate-100";
+  return (
+    <button
+      type="button"
+      className={`rounded-md border px-2.5 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${toneClasses}`}
+      {...props}
+    />
+  );
+}
+
 export function SubmitButton({ pending, children }: { pending: boolean; children: ReactNode }) {
   return (
     <button
