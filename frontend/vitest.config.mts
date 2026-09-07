@@ -1,21 +1,36 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+const alias = { "@": fileURLToPath(new URL("./src", import.meta.url)) };
+
 /**
- * Lightweight test setup for the API client (5.1 scaffold verification).
+ * Two projects rather than one environment.
  *
- * `environment: "node"` on purpose -- these tests exercise plain modules with
- * a stubbed `fetch`/`localStorage`, so there is no need to pull in jsdom.
- * Component tests, if 5.2+ needs them, can switch to a browser-like env then.
+ * `unit` keeps the 5.1 API-client tests in a plain node environment, where
+ * Node's own `fetch`/`Response`/`ReadableStream` are used unmodified.
+ * `dom` runs the React component tests under jsdom with Testing Library.
+ * (Vitest 5 removed `environmentMatchGlobs`; `projects` is its replacement.)
  */
 export default defineConfig({
   test: {
-    environment: "node",
-    include: ["src/**/*.test.ts"],
-  },
-  resolve: {
-    alias: {
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
-    },
+    projects: [
+      {
+        resolve: { alias },
+        test: {
+          name: "unit",
+          environment: "node",
+          include: ["src/**/*.test.ts"],
+        },
+      },
+      {
+        resolve: { alias },
+        test: {
+          name: "dom",
+          environment: "jsdom",
+          include: ["src/**/*.test.tsx"],
+          setupFiles: ["./src/test/setup-dom.ts"],
+        },
+      },
+    ],
   },
 });

@@ -78,12 +78,43 @@ for await (const event of streamChat("grade week 3 day 1")) {
 }
 ```
 
+## Routes and auth (5.2)
+
+| Route | Who | Notes |
+| --- | --- | --- |
+| `/` | anyone | Redirects to the caller's role home, or `/login`. |
+| `/login` | anyone | One form for both roles — the backend has no role field on login. |
+| `/register` | anyone | Student self-registration. `POST /auth/register` always creates a `student`, so there is deliberately no instructor sign-up. |
+| `/instructor` | instructors | Placeholder until 5.3-5.6. |
+| `/student` | students | Placeholder until 5.3-5.6. |
+
+**Guarding is client-side, per page, via `<RequireAuth>`.** Next 16 renamed
+Middleware to `proxy.ts`, but it runs on the server and can only read
+cookies — our JWT is in `localStorage`, so it is invisible there, and the
+Next docs limit Proxy to optimistic checks rather than real authorization.
+Layout-level checks are also ruled out by the docs: because of Partial
+Rendering, layouts do not re-render on navigation and cannot stop a route
+segment from rendering. The docs' guidance is to check close to the
+conditionally-rendered component, which is what `RequireAuth` does.
+
+The guard verifies the session with a real `GET /auth/me` rather than
+trusting that a token string exists — an expired token, or one from a reset
+dev database, resolves to anonymous and is cleared.
+
+**This guard is UX, not security.** Enforcement stays in the backend, where
+every protected endpoint already requires the Bearer token.
+
 ## Testing
 
 ```bash
 npm test            # Vitest, all mocked — never touches a real backend
 npm run verify:api  # LIVE run against a real backend on NEXT_PUBLIC_API_BASE_URL
 ```
+
+`npm test` runs two Vitest projects: `unit` (node environment, the API
+client) and `dom` (jsdom + Testing Library, the React forms and the route
+guard). Vitest 5 removed `environmentMatchGlobs`, so `projects` in
+`vitest.config.mts` is what splits them.
 
 `npm test` covers the fetch wrapper (auth headers, query encoding, form vs.
 FormData bodies, 204s, `ApiError` for 401/422/500/transport failures) and the
