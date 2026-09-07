@@ -40,6 +40,18 @@ Sub-feature 5.6 (student submission upload + own grades)
   uploaded the wrong file once it had been graded, with no way to correct
   it from the app.
 
+- NO INSTRUCTOR-FACING SIGNAL WHEN A SUBMISSION IS REPLACED AFTER
+  GRADING. When a student replaces a graded submission, the grade simply
+  disappears: the instructor's roster silently reverts that student to
+  "Not graded yet", with nothing recording that a grade ever existed, that
+  it was destroyed, or when. An instructor who had already reviewed the
+  work has no way to notice from the UI.
+
+  Deliberately out of scope for 5.6 and flagged as a separate open
+  question rather than built. A real fix needs backend support — at
+  minimum a timestamp or audit row surviving the replacement — because
+  the frontend cannot report on data the delete has already removed.
+
 - THE STRUCTURED RATIONALE IS RETURNED TO STUDENTS BUT NOT DISPLAYED.
   GET /sessions/{id}/grades/mine returns GradeRead.rationale — the full
   criterion-by-criterion breakdown parsed from rationale_json — alongside
