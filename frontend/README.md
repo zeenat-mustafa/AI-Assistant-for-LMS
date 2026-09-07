@@ -86,7 +86,7 @@ for await (const event of streamChat("grade week 3 day 1")) {
 | `/login` | anyone | One form for both roles — the backend has no role field on login. |
 | `/register` | anyone | Student self-registration. `POST /auth/register` always creates a `student`, so there is deliberately no instructor sign-up. |
 | `/instructor` | instructors | Create a session; list the ones you own (5.3). |
-| `/instructor/sessions/[id]` | instructors | Upload, list, download and remove assignment files (5.3). |
+| `/instructor/sessions/[id]` | instructors | Assignment files (5.3), plus the grade roster and grading chat (5.4). |
 | `/student` | students | Placeholder until 5.5-5.6. |
 
 The dynamic route's `page.tsx` is a Server Component whose only job is to
@@ -107,6 +107,18 @@ fetching need the browser, but parsing the segment does not.
   filename in the request before writing anything, so one duplicate name
   rejects the whole upload — including files that would otherwise have been
   fine. The error message says "nothing was uploaded" for that reason.
+- **The chat endpoints cannot be scoped by the caller.** `POST /chat` and
+  `/chat/stream` take only `{"instruction": string}`; Phase 3 resolves the
+  session by matching the instruction *text*. The embedded panel therefore
+  pre-fills the input with this session's title and sends it verbatim — it
+  never rewrites what the instructor typed, so Phase 3's deliberate
+  never-guess-on-ambiguity behaviour stays intact.
+- **`combined_score` is 0.0, not null, for an ungraded submitter.** It is
+  null only when the session has no assignment files at all. The roster
+  checks `per_file.length` to tell "not graded yet" from a genuine zero.
+- **The grade report omits students with zero submissions**, and the API
+  exposes no class roster to cross-reference against, so the table says so
+  in a footnote instead of implying it is the full class.
 
 **Guarding is client-side, per page, via `<RequireAuth>`.** Next 16 renamed
 Middleware to `proxy.ts`, but it runs on the server and can only read

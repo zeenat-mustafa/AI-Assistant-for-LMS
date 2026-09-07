@@ -115,8 +115,16 @@ export interface GradeRead {
 
 /**
  * `GradeSummary` -- one student's results for a session.
- * `combined_score` is null when nothing has been graded yet; otherwise it is
- * the sum of per-file scores divided by the session's TOTAL assignment count.
+ *
+ * `combined_score` is the sum of per-file scores divided by the session's
+ * TOTAL assignment count, rounded to the nearest 0.5.
+ *
+ * CAUTION: it is null ONLY when the session has no assignment files at all.
+ * A student who has submitted but has nothing graded yet scores 0.0, not
+ * null -- indistinguishable from a genuine zero unless you also check
+ * `per_file.length`. (Both this schema's docstring and an earlier comment
+ * here claimed null meant "not graded yet"; `_build_grade_summary` in
+ * backend/app/routers/grades.py shows otherwise.)
  */
 export interface GradeSummary {
   student_id: number;

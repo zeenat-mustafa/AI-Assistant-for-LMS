@@ -10,6 +10,66 @@ below are backend limitations the frontend SURFACES rather than works around —
 that is deliberate. Where the UI narrows or hides something, it is said so
 explicitly, because hiding is not enforcing.
 
+Sub-feature 5.4 (instructor grades roster + embedded grading chat)
+------------------------------------------------------------------------
+- A RESOLVED /chat/stream RUN CARRIES NO session_id, SO CROSS-SESSION
+  DETECTION IS A STRING CHECK. The five early-exit outcomes carry
+  structured fields (ambiguous_session has candidates with session_id,
+  ambiguous_student has session_id), but a run that actually grades
+  streams only grade_session_batch's own checking/graded/failed/summary
+  events — none of which names the session. The only signal available is
+  that 3.5's formatter interpolates the session title verbatim into the
+  summary message ("...in {session_title}."), so grading-chat.tsx matches
+  on `in {title}`.
+
+  Practical effect: if that wording ever changes, the check fails toward
+  showing the "ran on a different session" warning and skipping the
+  roster refresh. That is the safe direction — it never silently claims a
+  refresh happened — but the warning would then appear spuriously.
+
+  A clean fix would be a session_id field on the summary event, which is
+  a backend change and out of scope for Phase 5.
+
+- THE CHAT PANEL CANNOT SCOPE ITSELF TO ITS OWN PAGE. POST /chat and
+  /chat/stream accept exactly one field, {"instruction": string}. Phase 3
+  resolves the session from the instruction TEXT
+  (session_matcher.match_instruction_to_session), so an embedded panel on
+  /instructor/sessions/<id> has no way to say "this session".
+
+  DECISION (signed off): prefill, don't rewrite. The input starts
+  pre-filled with this session's exact title and is sent verbatim.
+  Silently injecting the title was rejected: if the instructor also names
+  a session, the matcher would receive two session names in one string
+  and its deliberate never-guess-on-ambiguity design would be undermined
+  from the UI side.
+
+- combined_score IS 0.0, NOT NULL, FOR A STUDENT WHO HAS SUBMITTED BUT
+  HAS NOTHING GRADED. _build_grade_summary returns None only when the
+  session has zero assignment files; otherwise it computes
+  sum(scores)/total_files, which is 0.0 with no grades. Rendered naively
+  that is indistinguishable from a genuine zero — and genuine zeros do
+  occur in the dev data (Nami scores 0.0 on both files in session 3).
+  The roster uses per_file.length to tell them apart.
+
+  Note that BOTH the GradeSummary schema docstring and 5.1's original
+  type comment claimed null meant "not graded yet". The comment in
+  frontend/src/lib/api/types.ts has been corrected; the backend
+  docstring is still wrong and was left alone as out of scope.
+
+- THE ROSTER CANNOT BE COMPLETED: NO CLASS-LIST ENDPOINT EXISTS.
+  session_grade_report is built from Submission rows, so students who
+  have submitted nothing never appear (the open Phase 1/2 gap). The whole
+  API is 21 routes and auth.py exposes only login/me/register, so there
+  is no roster source to cross-reference against. Surfaced as a visible
+  footnote on the table rather than fixed. In the dev DB this is not
+  hypothetical: 8 students exist, 3 have ever submitted.
+
+- NO WAY TO CANCEL AN IN-FLIGHT GRADING RUN FROM THE UI. The panel
+  aborts the fetch if the component unmounts, but the backend keeps
+  grading — grade_session_batch has no cancellation path, and an aborted
+  HTTP request does not stop it. There is deliberately no "Stop" button,
+  because one would imply a guarantee the backend cannot honour.
+
 Sub-feature 5.3 (instructor session + assignment file management)
 ------------------------------------------------------------------------
 - GET /sessions HAS NO OWNER FILTER, SO THE OWNERSHIP NARROWING IS

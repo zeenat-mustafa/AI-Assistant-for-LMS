@@ -127,14 +127,23 @@ export function SmallButton({
   );
 }
 
-export function SubmitButton({ pending, children }: { pending: boolean; children: ReactNode }) {
+export function SubmitButton({
+  pending,
+  pendingLabel = "Please wait…",
+  children,
+}: {
+  pending: boolean;
+  /** Override for long operations where "Please wait…" is too vague. */
+  pendingLabel?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <button
       type="submit"
       disabled={pending}
       className="w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
     >
-      {pending ? "Please wait…" : children}
+      {pending ? pendingLabel : children}
     </button>
   );
 }

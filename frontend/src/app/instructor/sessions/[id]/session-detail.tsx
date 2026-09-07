@@ -16,11 +16,14 @@ import {
   ApiError,
   deleteAssignment,
   downloadAssignment,
+  getGradeReport,
   getSession,
   listAssignments,
   uploadAssignment,
 } from "@/lib/api";
-import type { SessionRead, UnsolvedFileRead } from "@/lib/api";
+import type { SessionGradeReport, SessionRead, UnsolvedFileRead } from "@/lib/api";
+import { GradesRoster } from "./grades-roster";
+import { GradingChat } from "./grading-chat";
 import { RequireAuth } from "@/components/require-auth";
 import { SignedInShell } from "@/components/signed-in-shell";
 import {
@@ -55,6 +58,20 @@ async function loadSessionDetail(
   }
 }
 
+/** Same discard-if-stale shape as loadSessionDetail. */
+async function loadGradeReport(
+  sessionId: number,
+): Promise<{ report: SessionGradeReport } | { error: string }> {
+  try {
+    return { report: await getGradeReport(sessionId) };
+  } catch (error) {
+    return {
+      error:
+        error instanceof ApiError ? error.detail : "Could not load the grade report.",
+    };
+  }
+}
+
 export function SessionDetail({ sessionId }: { sessionId: number }) {
   return (
     <RequireAuth role="instructor">
@@ -70,6 +87,20 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
   const [files, setFiles] = useState<UnsolvedFileRead[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  const [report, setReport] = useState<SessionGradeReport | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
+
+  /** Re-read the roster after a grading run that targeted this session. */
+  const refreshReport = useCallback(async () => {
+    const result = await loadGradeReport(sessionId);
+    if ("error" in result) {
+      setReportError(result.error);
+      return;
+    }
+    setReport(result.report);
+    setReportError(null);
+  }, [sessionId]);
+
   useEffect(() => {
     // Guards against a slow response for one session id landing after the
     // user has already navigated to another.
@@ -83,6 +114,22 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
       setSession(result.session);
       setFiles(result.session.unsolved_files);
       setLoadError(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadGradeReport(sessionId).then((result) => {
+      if (cancelled) return;
+      if ("error" in result) {
+        setReportError(result.error);
+        return;
+      }
+      setReport(result.report);
+      setReportError(null);
     });
     return () => {
       cancelled = true;
@@ -125,6 +172,17 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
         sessionId={sessionId}
         files={files}
         onDeleted={refreshFiles}
+      />
+
+      <GradingChat
+        sessionTitle={session.title}
+        onGraded={() => void refreshReport()}
+      />
+
+      <GradesRoster
+        report={report}
+        error={reportError}
+        totalAssignmentFiles={files?.length ?? session.unsolved_files.length}
       />
     </div>
   );

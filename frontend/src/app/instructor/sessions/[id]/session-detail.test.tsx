@@ -21,6 +21,9 @@ const listAssignmentsMock = vi.fn();
 const uploadAssignmentMock = vi.fn();
 const downloadAssignmentMock = vi.fn();
 const deleteAssignmentMock = vi.fn();
+// 5.4 added the roster to this page; it must resolve, or its own error
+// banner becomes a second role="alert" and every assertion here is ambiguous.
+const getGradeReportMock = vi.fn();
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -31,6 +34,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     uploadAssignment: (...a: unknown[]) => uploadAssignmentMock(...a),
     downloadAssignment: (...a: unknown[]) => downloadAssignmentMock(...a),
     deleteAssignment: (...a: unknown[]) => deleteAssignmentMock(...a),
+    getGradeReport: (...a: unknown[]) => getGradeReportMock(...a),
   };
 });
 
@@ -92,6 +96,11 @@ async function renderDetail() {
 beforeEach(() => {
   vi.clearAllMocks();
   getSessionMock.mockResolvedValue(sessionWith([]));
+  getGradeReportMock.mockResolvedValue({
+    session_id: 5,
+    session_title: "Week 3 Day 1",
+    students: [],
+  });
 });
 
 describe("<SessionDetail /> — loading and header", () => {
