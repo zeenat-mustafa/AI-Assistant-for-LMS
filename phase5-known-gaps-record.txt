@@ -1,0 +1,271 @@
+Phase 5 — Known Gaps Record
+============================
+Gaps accepted by design during Phase 5 (Next.js frontend) sub-features. Not
+bugs — do not "fix" without being asked. See CLAUDE.md's "Known gaps" section
+for the Phase 1/2 equivalents, phase3-known-gaps-record.txt for Phase 3's, and
+phase4-known-gaps-record.txt for Phase 4's.
+
+Note on scope: Phase 5 is a thin UI over the existing API. Several entries
+below are backend limitations the frontend SURFACES rather than works around —
+that is deliberate. Where the UI narrows or hides something, it is said so
+explicitly, because hiding is not enforcing.
+
+Sub-feature 5.6 (student submission upload + own grades)
+------------------------------------------------------------------------
+- NO SUBMISSION-DEADLINE CONCEPT EXISTS ANYWHERE. Not in the schema, not
+  in the routers, not in the project spec. A student can therefore replace
+  a submission at any time — including long after an instructor has
+  reviewed and graded it — and, per the replace-and-delete behaviour
+  recorded under 5.5, doing so destroys the existing grade and its
+  feedback.
+
+  Nothing was built around this in Phase 5: no deadline logic, no
+  countdown, no time-based restriction, not even a cosmetic one, because
+  a client-side deadline would imply an enforcement the backend does not
+  have. Flagged as a real limitation for future consideration (Extended
+  Goals or Phase 6), where it would need a deadline column on the session
+  plus a server-side check in upload_submission.
+
+- THE RE-UPLOAD CONFIRM IS A UX GUARDRAIL, NOT PROTECTION. When a student
+  re-uploads over a graded submission, the UI names the exact score that
+  will be destroyed and requires an explicit second click before the
+  upload call is made. That is all it is: the endpoint is unchanged and
+  still replaces-and-deletes for any caller — Swagger, curl, the MCP
+  surface, or any future client — and the student can click through the
+  confirm themselves. It makes the cost visible and asks for consent; it
+  does not prevent anything.
+
+  Blocking re-upload entirely was considered and rejected: there is no
+  delete-submission endpoint, so a hard block would strand a student who
+  uploaded the wrong file once it had been graded, with no way to correct
+  it from the app.
+
+- NO INSTRUCTOR-FACING SIGNAL WHEN A SUBMISSION IS REPLACED AFTER
+  GRADING. When a student replaces a graded submission, the grade simply
+  disappears: the instructor's roster silently reverts that student to
+  "Not graded yet", with nothing recording that a grade ever existed, that
+  it was destroyed, or when. An instructor who had already reviewed the
+  work has no way to notice from the UI.
+
+  Deliberately out of scope for 5.6 and flagged as a separate open
+  question rather than built. A real fix needs backend support — at
+  minimum a timestamp or audit row surviving the replacement — because
+  the frontend cannot report on data the delete has already removed.
+
+- THE STRUCTURED RATIONALE IS RETURNED TO STUDENTS BUT NOT DISPLAYED.
+  GET /sessions/{id}/grades/mine returns GradeRead.rationale — the full
+  criterion-by-criterion breakdown parsed from rationale_json — alongside
+  the human-readable feedback_text. The student UI deliberately renders
+  only feedback_text; the structured rationale is reserved for the
+  Extended-Goals "why this grade" chatbot. Note this is a display choice
+  only: the data is already on the wire and visible in devtools or via a
+  direct API call, so it is not confidential.
+
+Sub-feature 5.5 (student session list + assignment downloads)
+------------------------------------------------------------------------
+- RE-UPLOADING A SUBMISSION REPLACES IT AND DESTROYS ITS GRADES. This is
+  NOT the assignment side's atomic-409 behaviour, and it matters for 5.6.
+  upload_submission looks up the existing Submission for
+  (session_id, student_id), deletes each of its SubmissionFile rows, then
+  deletes the Submission itself before creating the new one. Grade rows
+  go with them — cleanly, via BOTH SubmissionFile.grade's
+  cascade="all, delete-orphan" AND the FK's ondelete="CASCADE" with
+  PRAGMA foreign_keys=ON — so they are deleted rather than orphaned.
+
+  Practical effect: a student who re-uploads after being graded silently
+  loses every mark for that session, and the instructor's roster silently
+  drops back to "Not graded yet". Nothing in the API warns about this.
+  5.6's upload UI must surface it before the upload, since there is no
+  undo and no versioning.
+
+- A RE-UPLOAD UNDER A DIFFERENT FILENAME ORPHANS THE OLD FILE ON DISK.
+  save_submission_file writes into the same per-student directory without
+  clearing it, and the upload handler deletes DB rows only. Same shape as
+  the orphaned-files issue recorded in Phase 3. Re-uploading the SAME
+  filename overwrites cleanly, so this only accumulates when the name
+  changes.
+
+- THE STUDENT DASHBOARD LISTS EVERY SESSION, BECAUSE ENROLMENT DOES NOT
+  EXIST. There is no enrolment table anywhere in the schema and
+  GET /sessions is gated on get_current_user, so a student sees every
+  instructor's sessions.
+
+  DECISION (signed off): show all, with a visible note saying so. Not a
+  workaround — there is nothing correct to filter by. Filtering on "has a
+  submission" was rejected against real data: the seeded demo student has
+  no submissions anywhere, so that filter would render an empty dashboard
+  with no route to any session, hiding sessions at precisely the moment a
+  student needs to find one.
+
+- STUDENTS CAN READ ANY SESSION'S DETAIL AND DOWNLOAD ANY ASSIGNMENT
+  FILE. get_session, list_assignments and download_assignment are all
+  gated on get_current_user rather than on any ownership or enrolment
+  check. This is what makes the student pages work at all, and it is
+  pre-existing backend behaviour, but it means assignment files are
+  readable by every authenticated account, not only intended recipients.
+  Recorded alongside the 5.3 entry on missing ownership checks.
+
+Sub-feature 5.4 (instructor grades roster + embedded grading chat)
+------------------------------------------------------------------------
+- A RESOLVED /chat/stream RUN CARRIES NO session_id, SO CROSS-SESSION
+  DETECTION IS A STRING CHECK. The five early-exit outcomes carry
+  structured fields (ambiguous_session has candidates with session_id,
+  ambiguous_student has session_id), but a run that actually grades
+  streams only grade_session_batch's own checking/graded/failed/summary
+  events — none of which names the session. The only signal available is
+  that 3.5's formatter interpolates the session title verbatim into the
+  summary message ("...in {session_title}."), so grading-chat.tsx matches
+  on `in {title}`.
+
+  Practical effect: if that wording ever changes, the check fails toward
+  showing the "ran on a different session" warning and skipping the
+  roster refresh. That is the safe direction — it never silently claims a
+  refresh happened — but the warning would then appear spuriously.
+
+  A clean fix would be a session_id field on the summary event, which is
+  a backend change and out of scope for Phase 5.
+
+- THE CHAT PANEL CANNOT SCOPE ITSELF TO ITS OWN PAGE. POST /chat and
+  /chat/stream accept exactly one field, {"instruction": string}. Phase 3
+  resolves the session from the instruction TEXT
+  (session_matcher.match_instruction_to_session), so an embedded panel on
+  /instructor/sessions/<id> has no way to say "this session".
+
+  DECISION (signed off): prefill, don't rewrite. The input starts
+  pre-filled with this session's exact title and is sent verbatim.
+  Silently injecting the title was rejected: if the instructor also names
+  a session, the matcher would receive two session names in one string
+  and its deliberate never-guess-on-ambiguity design would be undermined
+  from the UI side.
+
+- combined_score IS 0.0, NOT NULL, FOR A STUDENT WHO HAS SUBMITTED BUT
+  HAS NOTHING GRADED. _build_grade_summary returns None only when the
+  session has zero assignment files; otherwise it computes
+  sum(scores)/total_files, which is 0.0 with no grades. Rendered naively
+  that is indistinguishable from a genuine zero — and genuine zeros do
+  occur in the dev data (Nami scores 0.0 on both files in session 3).
+  The roster uses per_file.length to tell them apart.
+
+  Note that BOTH the GradeSummary schema docstring and 5.1's original
+  type comment claimed null meant "not graded yet". The comment in
+  frontend/src/lib/api/types.ts has been corrected; the backend
+  docstring is still wrong and was left alone as out of scope.
+
+- THE ROSTER CANNOT BE COMPLETED: NO CLASS-LIST ENDPOINT EXISTS.
+  session_grade_report is built from Submission rows, so students who
+  have submitted nothing never appear (the open Phase 1/2 gap). The whole
+  API is 21 routes and auth.py exposes only login/me/register, so there
+  is no roster source to cross-reference against. Surfaced as a visible
+  footnote on the table rather than fixed. In the dev DB this is not
+  hypothetical: 8 students exist, 3 have ever submitted.
+
+- NO WAY TO CANCEL AN IN-FLIGHT GRADING RUN FROM THE UI. The panel
+  aborts the fetch if the component unmounts, but the backend keeps
+  grading — grade_session_batch has no cancellation path, and an aborted
+  HTTP request does not stop it. There is deliberately no "Stop" button,
+  because one would imply a guarantee the backend cannot honour.
+
+Sub-feature 5.3 (instructor session + assignment file management)
+------------------------------------------------------------------------
+- GET /sessions HAS NO OWNER FILTER, SO THE OWNERSHIP NARROWING IS
+  CLIENT-SIDE AND BREAKS PAST ONE PAGE. The endpoint is literally
+  "List all sessions" (backend/app/routers/sessions.py::list_sessions):
+  it takes no instructor_id, applies no filter, and is gated on
+  get_current_user rather than require_instructor — so any authenticated
+  user, student included, can read every instructor's session list.
+
+  The instructor dashboard therefore fetches one page and filters on
+  `instructor_id === user.id` in the browser
+  (frontend/src/app/instructor/instructor-dashboard.tsx::loadOwnSessions).
+
+  Practical effect: the page requests limit=200, the backend's maximum.
+  Below 200 TOTAL sessions across ALL instructors the filtered list is
+  correct. Above that, sessions belonging to this instructor can sit
+  beyond the fetched page and silently vanish from their dashboard —
+  filtering a page after the fact cannot see what the page did not
+  contain. `SessionList.total` is the unfiltered count for every
+  instructor, so it is deliberately never displayed anywhere in the UI.
+
+  This also means the narrowing is cosmetic, not access control: another
+  instructor's session is still readable through the API, and typing its
+  id into /instructor/sessions/<id> will load it (see the next entry).
+
+  DECISION (deferred, deliberately): not fixed in Phase 5, because the
+  fix belongs in the backend (an instructor_id filter on list_sessions,
+  and an ownership check on the session detail/delete routes), and Phase
+  5's prompts scope the backend as off-limits. Only one instructor is
+  seeded, so the demo never exercises it. Revisit if a second instructor
+  account is ever added, or in Phase 6 if multi-instructor is demoed.
+
+- NO OWNERSHIP CHECKS ON SESSION DETAIL OR DELETE. GET /sessions/{id}
+  requires only get_current_user, and DELETE /sessions/{id} requires only
+  require_instructor — neither verifies the session belongs to the
+  caller. So any instructor can read or delete any instructor's session,
+  and any student can read one. Pre-existing backend behaviour, unchanged
+  and unmasked by Phase 5; recorded here because 5.3 is the first thing
+  to put a UI on those routes.
+
+- ASSIGNMENT UPLOAD IS ATOMIC PER BATCH, AND THE UI SAYS SO RATHER THAN
+  RETRYING. The backend checks every filename in a request against the
+  session before persisting anything, so a single duplicate name rejects
+  the whole upload with 409 — including files in the same batch that
+  would have been accepted on their own. Verified live in 5.3: a batch of
+  one brand-new filename plus one duplicate wrote neither.
+
+  The UI appends "(nothing was uploaded)" to the backend's message
+  instead of splitting the batch and retrying the survivors. Splitting
+  would silently produce a partial upload the instructor did not ask
+  for, and would hide the name collision they need to resolve.
+
+- REMOVE HAS NO UNDO. DELETE /sessions/{id}/assignments/{file_id} is
+  immediate and permanent (row + file on disk). The UI requires a second
+  click to confirm, which is the whole of the protection.
+
+Sub-feature 5.2 (auth pages and protected routing)
+------------------------------------------------------------------------
+- THE ROUTE GUARD IS UX, NOT SECURITY. <RequireAuth> runs in the browser
+  and can only hide UI. Enforcement remains entirely in the backend,
+  where every protected endpoint requires the Bearer token. This is not
+  a shortcut that could be closed client-side: the JWT lives in
+  localStorage, so proxy.ts (Next 16's renamed Middleware) cannot see it
+  — it runs on the server and reads cookies — and the Next docs limit
+  Proxy to optimistic checks rather than authorization anyway.
+
+- NO INSTRUCTOR REGISTRATION PATH, BY BACKEND DESIGN. POST /auth/register
+  is public and hardcodes UserRole.student; the role cannot be set by the
+  caller. Instructors are seeded by the backend. The UI has no role
+  selector for that reason — this is correct behaviour, not a missing
+  screen.
+
+- THE 8-CHARACTER PASSWORD MINIMUM IS CLIENT-SIDE ONLY. The backend's
+  UserRegister schema imposes no password rules at all, so the rule can
+  be bypassed by calling the API directly. It is a UX guard, not policy.
+
+Sub-feature 5.1 (scaffold + typed API client)
+------------------------------------------------------------------------
+- THE JWT IS IN localStorage, WHICH IS SCRIPT-READABLE. A successful XSS
+  could steal it; an httpOnly cookie could not be read by script. Chosen
+  knowingly: the backend authenticates with a plain Bearer JWT and has no
+  cookie or CSRF handling whatsoever, so switching would require backend
+  changes. Acceptable for a local capstone demo, not for deployment.
+
+- NO TOKEN-EXPIRY OR REFRESH HANDLING. Tokens last 8 hours
+  (access_token_expire_minutes=480) and there is no refresh flow. The
+  session resolver treats a 401 from GET /auth/me as "anonymous" and
+  clears the stale token, so an expired session degrades to a redirect to
+  /login rather than a broken page — but an expiry that happens mid-page
+  surfaces as a failed request, not a proactive sign-out. Matches the
+  Phase 3 gap about SSE connections having no token-refresh handling.
+
+- THE TYPED CLIENT MIRRORS THE BACKEND SCHEMAS BY HAND. Nothing generates
+  or verifies frontend/src/lib/api/types.ts against the Pydantic schemas;
+  a backend schema change will not fail the frontend build. The parity
+  risk is real but small at this scope, and an OpenAPI codegen step was
+  judged more machinery than a thin UI warrants. If drift ever bites,
+  generating from the FastAPI /openapi.json is the natural fix.
+
+- TWO BACKEND RETURN SHAPES ARE LEFT UNTYPED ON PURPOSE.
+  generate-rubric and the single-file grade endpoint both return plain
+  dicts rather than Pydantic models on the backend, so the client types
+  them as Record<string, unknown> instead of inventing a shape that
+  nothing guarantees.

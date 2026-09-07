@@ -86,3 +86,9 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# The Python packaging rules above are unanchored, so `lib/` also matched the
+# Next.js frontend's own source folder and silently excluded the whole API
+# client. Re-include it explicitly (frontend/ has its own .gitignore for
+# node_modules/.next/.env).
+!frontend/src/lib/
