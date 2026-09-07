@@ -35,7 +35,7 @@ import {
   SmallButton,
   SubmitButton,
 } from "@/components/ui";
-import { formatDate } from "../../instructor-dashboard";
+import { formatDate } from "@/lib/format";
 
 /** Mirrors the backend's own `_ALLOWED_EXTENSIONS` in routers/assignments.py. */
 const ACCEPTED_EXTENSIONS = [".ipynb", ".zip"];

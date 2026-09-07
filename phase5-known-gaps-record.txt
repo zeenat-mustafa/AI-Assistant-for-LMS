@@ -10,6 +10,50 @@ below are backend limitations the frontend SURFACES rather than works around —
 that is deliberate. Where the UI narrows or hides something, it is said so
 explicitly, because hiding is not enforcing.
 
+Sub-feature 5.5 (student session list + assignment downloads)
+------------------------------------------------------------------------
+- RE-UPLOADING A SUBMISSION REPLACES IT AND DESTROYS ITS GRADES. This is
+  NOT the assignment side's atomic-409 behaviour, and it matters for 5.6.
+  upload_submission looks up the existing Submission for
+  (session_id, student_id), deletes each of its SubmissionFile rows, then
+  deletes the Submission itself before creating the new one. Grade rows
+  go with them — cleanly, via BOTH SubmissionFile.grade's
+  cascade="all, delete-orphan" AND the FK's ondelete="CASCADE" with
+  PRAGMA foreign_keys=ON — so they are deleted rather than orphaned.
+
+  Practical effect: a student who re-uploads after being graded silently
+  loses every mark for that session, and the instructor's roster silently
+  drops back to "Not graded yet". Nothing in the API warns about this.
+  5.6's upload UI must surface it before the upload, since there is no
+  undo and no versioning.
+
+- A RE-UPLOAD UNDER A DIFFERENT FILENAME ORPHANS THE OLD FILE ON DISK.
+  save_submission_file writes into the same per-student directory without
+  clearing it, and the upload handler deletes DB rows only. Same shape as
+  the orphaned-files issue recorded in Phase 3. Re-uploading the SAME
+  filename overwrites cleanly, so this only accumulates when the name
+  changes.
+
+- THE STUDENT DASHBOARD LISTS EVERY SESSION, BECAUSE ENROLMENT DOES NOT
+  EXIST. There is no enrolment table anywhere in the schema and
+  GET /sessions is gated on get_current_user, so a student sees every
+  instructor's sessions.
+
+  DECISION (signed off): show all, with a visible note saying so. Not a
+  workaround — there is nothing correct to filter by. Filtering on "has a
+  submission" was rejected against real data: the seeded demo student has
+  no submissions anywhere, so that filter would render an empty dashboard
+  with no route to any session, hiding sessions at precisely the moment a
+  student needs to find one.
+
+- STUDENTS CAN READ ANY SESSION'S DETAIL AND DOWNLOAD ANY ASSIGNMENT
+  FILE. get_session, list_assignments and download_assignment are all
+  gated on get_current_user rather than on any ownership or enrolment
+  check. This is what makes the student pages work at all, and it is
+  pre-existing backend behaviour, but it means assignment files are
+  readable by every authenticated account, not only intended recipients.
+  Recorded alongside the 5.3 entry on missing ownership checks.
+
 Sub-feature 5.4 (instructor grades roster + embedded grading chat)
 ------------------------------------------------------------------------
 - A RESOLVED /chat/stream RUN CARRIES NO session_id, SO CROSS-SESSION

@@ -15,6 +15,7 @@ import Link from "next/link";
 import { ApiError, createSession, listSessions } from "@/lib/api";
 import type { SessionRead } from "@/lib/api";
 import { useAuth } from "@/lib/auth/auth-context";
+import { formatDate } from "@/lib/format";
 import {
   EmptyState,
   Field,
@@ -182,18 +183,4 @@ export function InstructorDashboard() {
       </Panel>
     </div>
   );
-}
-
-/**
- * The backend sends naive ISO timestamps (no timezone suffix), so they are
- * rendered as-is in local terms rather than being shifted by a UTC assumption.
- */
-export function formatDate(iso: string): string {
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) return iso;
-  return parsed.toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
 }

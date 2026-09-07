@@ -87,7 +87,8 @@ for await (const event of streamChat("grade week 3 day 1")) {
 | `/register` | anyone | Student self-registration. `POST /auth/register` always creates a `student`, so there is deliberately no instructor sign-up. |
 | `/instructor` | instructors | Create a session; list the ones you own (5.3). |
 | `/instructor/sessions/[id]` | instructors | Assignment files (5.3), plus the grade roster and grading chat (5.4). |
-| `/student` | students | Placeholder until 5.5-5.6. |
+| `/student` | students | Every session in the system, with an enrolment caveat (5.5). |
+| `/student/sessions/[id]` | students | Assignment downloads and own submission status (5.5). |
 
 The dynamic route's `page.tsx` is a Server Component whose only job is to
 `await props.params` (typed with the generated `PageProps<'/instructor/sessions/[id]'>`)
@@ -119,6 +120,19 @@ fetching need the browser, but parsing the segment does not.
 - **The grade report omits students with zero submissions**, and the API
   exposes no class roster to cross-reference against, so the table says so
   in a footnote instead of implying it is the full class.
+- **There is no enrolment concept at all**, and `GET /sessions` is open to
+  any authenticated user, so the student dashboard lists *every* session
+  with a visible note saying so. Filtering by "has a submission" was
+  rejected: the seeded demo student has none, so it would render an empty
+  dashboard with no route to any session.
+- **`GET /sessions/{id}/submissions/mine` answers 200 with a `null` body**
+  when nothing has been submitted — it is not a 404. That is the normal
+  "not submitted yet" case and must never render as an error.
+- **Re-uploading a submission REPLACES the previous one and deletes its
+  grades.** `upload_submission` deletes the old `Submission` and its
+  `SubmissionFile` rows; `Grade` cascades from `SubmissionFile` both via
+  the ORM relationship and the FK. This is not the assignment side's
+  atomic-409 behaviour. 5.6's upload UI has to warn about it.
 
 **Guarding is client-side, per page, via `<RequireAuth>`.** Next 16 renamed
 Middleware to `proxy.ts`, but it runs on the server and can only read

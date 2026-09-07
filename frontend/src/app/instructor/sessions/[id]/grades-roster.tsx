@@ -24,7 +24,7 @@ import { useState } from "react";
 import type { GradeSummary, SessionGradeReport } from "@/lib/api";
 import { EmptyState, Loading, Panel, SmallButton } from "@/components/ui";
 import { FormError } from "@/components/ui";
-import { formatDate } from "../../instructor-dashboard";
+import { formatDate } from "@/lib/format";
 
 export function GradesRoster({
   report,
