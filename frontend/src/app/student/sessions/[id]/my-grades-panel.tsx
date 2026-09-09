@@ -22,7 +22,7 @@
 
 import type { GradeSummary, SubmissionRead } from "@/lib/api";
 import { EmptyState, FormError, Loading, Panel } from "@/components/ui";
-import { formatDate } from "@/lib/format";
+import { GradeFileRow } from "@/components/grade-file-row";
 
 export function MyGradesPanel({
   grades,
@@ -73,26 +73,14 @@ export function MyGradesPanel({
             </div>
           ) : null}
 
-          <ul className="space-y-5">
+          {/*
+            Summary first: the combined score above stays the headline, and
+            each file collapses to filename + score until asked to open. The
+            detail is unchanged, only hidden by default.
+          */}
+          <ul className="divide-y divide-slate-100">
             {gradedFiles.map((grade) => (
-              <li key={grade.id}>
-                <div className="flex items-baseline justify-between gap-3">
-                  <span className="truncate text-sm font-medium text-slate-900">
-                    {grade.original_filename}
-                  </span>
-                  <span className="shrink-0 text-sm font-medium tabular-nums text-slate-900">
-                    {grade.score} / 10
-                  </span>
-                </div>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  Graded {formatDate(grade.graded_at)}
-                </p>
-                {grade.feedback_text ? (
-                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
-                    {grade.feedback_text}
-                  </p>
-                ) : null}
-              </li>
+              <GradeFileRow key={grade.id} grade={grade} />
             ))}
           </ul>
 

@@ -138,7 +138,9 @@ describe("<GradesRoster />", () => {
     expect(screen.getByText("8.5 / 10")).toBeInTheDocument();
     expect(screen.getByText("b.ipynb")).toBeInTheDocument();
     expect(screen.getByText("6 / 10")).toBeInTheDocument();
-    expect(screen.getByText("Missing the plotting step.")).toBeInTheDocument();
+    // Fix D: the per-file feedback is now collapsed behind the file's own
+    // toggle, so it is present but not visible until that file is opened.
+    expect(screen.getByText("Missing the plotting step.")).not.toBeVisible();
 
     await userEvent.click(screen.getByRole("button", { name: /hide files/i }));
     expect(screen.queryByText("a.ipynb")).not.toBeInTheDocument();
@@ -188,5 +190,105 @@ describe("<GradesRoster />", () => {
 
     expect(screen.getByText("fiza.ipynb")).toBeInTheDocument();
     expect(screen.queryByText("soph.ipynb")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Fix D — the roster's per-file rows collapse too.
+ *
+ * There are now two levels: a student expands to reveal their files, and each
+ * file expands to reveal its detail. Assertions are on VISIBILITY, since the
+ * detail stays mounted while collapsed.
+ */
+describe("<GradesRoster /> — collapsible per-file detail", () => {
+  const TWO_FILES = report([
+    student({
+      per_file: [
+        grade({ id: 1, original_filename: "a.ipynb", score: 8.5, feedback_text: "Good work on a." }),
+        grade({ id: 2, original_filename: "b.ipynb", score: 6, feedback_text: "Missing the plot in b." }),
+      ],
+    }),
+  ]);
+
+  /** Expand the student so their file rows are on screen. */
+  async function showFiles() {
+    render(<GradesRoster report={TWO_FILES} error={null} totalAssignmentFiles={2} />);
+    await userEvent.click(screen.getByRole("button", { name: /show files/i }));
+  }
+
+  it("keeps the combined score prominent on the student row", async () => {
+    await showFiles();
+    expect(screen.getByText("9 / 10")).toBeVisible();
+  });
+
+  it("collapses each file to filename and score by default", async () => {
+    await showFiles();
+
+    expect(screen.getByText("a.ipynb")).toBeVisible();
+    expect(screen.getByText("8.5 / 10")).toBeVisible();
+    expect(screen.getByText("b.ipynb")).toBeVisible();
+    expect(screen.getByText("6 / 10")).toBeVisible();
+
+    expect(screen.getByText("Good work on a.")).not.toBeVisible();
+    expect(screen.getByText("Missing the plot in b.")).not.toBeVisible();
+  });
+
+  it("expands one file in place without touching the other", async () => {
+    await showFiles();
+
+    await userEvent.click(screen.getByRole("button", { name: /a\.ipynb/ }));
+    expect(screen.getByText("Good work on a.")).toBeVisible();
+    expect(screen.getByText("Missing the plot in b.")).not.toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: /b\.ipynb/ }));
+    expect(screen.getByText("Good work on a.")).toBeVisible();
+    expect(screen.getByText("Missing the plot in b.")).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: /b\.ipynb/ }));
+    expect(screen.getByText("Good work on a.")).toBeVisible();
+    expect(screen.getByText("Missing the plot in b.")).not.toBeVisible();
+  });
+
+  it("shows a genuine zero as a score in the collapsed row", async () => {
+    render(
+      <GradesRoster
+        report={report([
+          student({
+            student_name: "Nami",
+            per_file: [grade({ id: 1, original_filename: "z.ipynb", score: 0 })],
+            combined_score: 0,
+          }),
+        ])}
+        error={null}
+        totalAssignmentFiles={1}
+      />,
+    );
+
+    // The student scored zero -- that must read as a score, not as ungraded.
+    expect(screen.getByText("0 / 10")).toBeVisible();
+    expect(screen.queryByText(/not graded yet/i)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /show files/i }));
+    expect(screen.getByText("z.ipynb")).toBeVisible();
+    expect(screen.getAllByText("0 / 10").length).toBeGreaterThan(0);
+  });
+
+  it("still distinguishes an ungraded submitter, whose 0.0 is not a score", () => {
+    render(
+      <GradesRoster
+        report={report([
+          student({ student_name: "Soph", per_file: [], combined_score: 0 }),
+        ])}
+        error={null}
+        totalAssignmentFiles={1}
+      />,
+    );
+
+    // Same combined_score of 0 as the case above, opposite meaning. The
+    // collapse must not have blurred the distinction.
+    expect(screen.getByText(/not graded yet/i)).toBeVisible();
+    expect(screen.queryByText("0 / 10")).not.toBeInTheDocument();
+    // No files to expand, so no toggle at all.
+    expect(screen.queryByRole("button", { name: /show files/i })).not.toBeInTheDocument();
   });
 });

@@ -1,0 +1,99 @@
+"use client";
+
+/**
+ * One graded file: collapsed to filename + score, expandable in place.
+ *
+ * Shared by the student's own-grades panel and the instructor's roster so the
+ * two cannot drift — the collapse behaviour and, more importantly, the
+ * zero-versus-ungraded handling have to be identical in both.
+ *
+ * Zero versus ungraded
+ * --------------------
+ * A `GradeRead` in `per_file` always represents a real, completed grading run,
+ * so `score` here is always a genuine score — 0 included. The ambiguous value
+ * is `GradeSummary.combined_score`, which is 0.0 both for a real zero and for
+ * a submitter with nothing graded; that distinction is made by the CALLER,
+ * from `per_file.length`, before it ever renders a row. This component is
+ * therefore never asked to guess: if it is rendering, the file is graded, and
+ * "0 / 10" means the student scored zero.
+ *
+ * Content is unchanged from what these panels showed before — the graded date
+ * and the instructor-facing feedback text — it is simply hidden until asked
+ * for. `GradeRead.rationale`, the structured criterion breakdown, is still
+ * deliberately not rendered anywhere: it remains reserved for the
+ * Extended-Goals "why this grade" chatbot.
+ */
+
+import { useId, useState } from "react";
+
+import type { GradeRead } from "@/lib/api";
+import { formatDate } from "@/lib/format";
+
+export function GradeFileRow({
+  grade,
+  dense = false,
+}: {
+  grade: GradeRead;
+  /** Tighter type scale, for the roster's nested per-student list. */
+  dense?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const panelId = useId();
+
+  const nameClass = dense
+    ? "truncate text-xs font-medium text-slate-800"
+    : "truncate text-sm font-medium text-slate-900";
+  const scoreClass = dense
+    ? "shrink-0 text-xs tabular-nums text-slate-600"
+    : "shrink-0 text-sm font-medium tabular-nums text-slate-900";
+
+  return (
+    <li className={dense ? "py-1" : "py-1.5"}>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        className="flex w-full items-baseline justify-between gap-3 rounded-md py-1 text-left hover:bg-slate-50"
+      >
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span
+            aria-hidden
+            className={`shrink-0 text-slate-400 transition-transform ${
+              expanded ? "rotate-90" : ""
+            }`}
+          >
+            ›
+          </span>
+          <span className={nameClass}>{grade.original_filename}</span>
+        </span>
+        <span className={scoreClass}>{grade.score} / 10</span>
+      </button>
+
+      {/*
+        Kept mounted and toggled with `hidden` rather than unmounted, so the
+        aria-controls target always exists for assistive tech.
+      */}
+      <div id={panelId} hidden={!expanded} className={dense ? "pl-4" : "pl-4"}>
+        <p className="mt-0.5 text-xs text-slate-500">
+          Graded {formatDate(grade.graded_at)}
+        </p>
+        {grade.feedback_text ? (
+          <p
+            className={
+              dense
+                ? "mt-1 whitespace-pre-wrap text-xs text-slate-600"
+                : "mt-2 whitespace-pre-wrap text-sm text-slate-700"
+            }
+          >
+            {grade.feedback_text}
+          </p>
+        ) : (
+          <p className="mt-1 text-xs text-slate-400">
+            No written feedback was recorded for this file.
+          </p>
+        )}
+      </div>
+    </li>
+  );
+}

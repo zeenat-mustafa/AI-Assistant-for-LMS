@@ -24,7 +24,7 @@ import { useState } from "react";
 import type { GradeSummary, SessionGradeReport } from "@/lib/api";
 import { EmptyState, Loading, Panel, SmallButton } from "@/components/ui";
 import { FormError } from "@/components/ui";
-import { formatDate } from "@/lib/format";
+import { GradeFileRow } from "@/components/grade-file-row";
 
 export function GradesRoster({
   report,
@@ -118,27 +118,14 @@ function StudentRow({
         </span>
       </div>
 
+      {/*
+        Each file collapses to filename + score; opening one leaves the others
+        as they were.
+      */}
       {expanded && !nothingGraded ? (
-        <ul className="mt-3 space-y-2 border-l-2 border-slate-200 pl-4">
+        <ul className="mt-3 border-l-2 border-slate-200 pl-4">
           {student.per_file.map((grade) => (
-            <li key={grade.id}>
-              <div className="flex items-baseline justify-between gap-3">
-                <span className="truncate text-xs font-medium text-slate-800">
-                  {grade.original_filename}
-                </span>
-                <span className="shrink-0 text-xs tabular-nums text-slate-600">
-                  {grade.score} / 10
-                </span>
-              </div>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Graded {formatDate(grade.graded_at)}
-              </p>
-              {grade.feedback_text ? (
-                <p className="mt-1 whitespace-pre-wrap text-xs text-slate-600">
-                  {grade.feedback_text}
-                </p>
-              ) : null}
-            </li>
+            <GradeFileRow key={grade.id} grade={grade} dense />
           ))}
         </ul>
       ) : null}

@@ -1,7 +1,8 @@
 /** Own-grades display: graded / ungraded / not-submitted, and no raw rationale. */
 
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import type { GradeRead, GradeSummary, SubmissionRead } from "@/lib/api";
 
@@ -187,5 +188,121 @@ describe("<MyGradesPanel />", () => {
       />,
     );
     expect(screen.getByRole("alert")).toHaveTextContent("Session 3 not found.");
+  });
+});
+
+/**
+ * Fix D — summary first, per-file detail collapsed until asked for.
+ *
+ * These assert VISIBILITY, not presence. The detail stays mounted and is
+ * toggled with the `hidden` attribute so find-in-page still reaches it, which
+ * means `toBeInTheDocument` would pass while collapsed and prove nothing.
+ */
+describe("<MyGradesPanel /> — collapsible per-file detail", () => {
+  const twoFiles = summary({
+    per_file: [
+      grade({ id: 1, original_filename: "a.ipynb", score: 8.5, feedback_text: "Good work on a." }),
+      grade({ id: 2, original_filename: "b.ipynb", score: 6, feedback_text: "Missing the plot in b." }),
+    ],
+  });
+
+  function renderTwo() {
+    render(
+      <MyGradesPanel
+        grades={twoFiles}
+        error={null}
+        submission={SUBMISSION}
+        totalAssignmentFiles={2}
+      />,
+    );
+  }
+
+  it("keeps the combined score prominent at the top", () => {
+    renderTwo();
+    expect(screen.getByText(/combined score/i)).toBeVisible();
+    expect(screen.getByText("4.5 / 10")).toBeVisible();
+  });
+
+  it("collapses each file to filename and score by default", () => {
+    renderTwo();
+
+    // The summary line of each row is visible...
+    expect(screen.getByText("a.ipynb")).toBeVisible();
+    expect(screen.getByText("8.5 / 10")).toBeVisible();
+    expect(screen.getByText("b.ipynb")).toBeVisible();
+    expect(screen.getByText("6 / 10")).toBeVisible();
+
+    // ...but its detail is not.
+    expect(screen.getByText("Good work on a.")).not.toBeVisible();
+    expect(screen.getByText("Missing the plot in b.")).not.toBeVisible();
+    for (const button of screen.getAllByRole("button")) {
+      expect(button).toHaveAttribute("aria-expanded", "false");
+    }
+  });
+
+  it("expands one file in place to reveal its detail", async () => {
+    renderTwo();
+
+    await userEvent.click(screen.getByRole("button", { name: /a\.ipynb/ }));
+
+    expect(screen.getByText("Good work on a.")).toBeVisible();
+    // Both files share a graded date, so scope to the row that was opened.
+    const openRow = screen.getByRole("button", { name: /a\.ipynb/ }).closest("li")!;
+    expect(within(openRow).getByText(/Graded Sep 7, 2026/)).toBeVisible();
+    // Still in place -- the score did not move or disappear.
+    expect(screen.getByText("8.5 / 10")).toBeVisible();
+  });
+
+  it("expands files independently", async () => {
+    renderTwo();
+
+    await userEvent.click(screen.getByRole("button", { name: /a\.ipynb/ }));
+    expect(screen.getByText("Good work on a.")).toBeVisible();
+    expect(screen.getByText("Missing the plot in b.")).not.toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: /b\.ipynb/ }));
+    // Opening the second must not close the first.
+    expect(screen.getByText("Good work on a.")).toBeVisible();
+    expect(screen.getByText("Missing the plot in b.")).toBeVisible();
+
+    // And collapsing one leaves the other open.
+    await userEvent.click(screen.getByRole("button", { name: /a\.ipynb/ }));
+    expect(screen.getByText("Good work on a.")).not.toBeVisible();
+    expect(screen.getByText("Missing the plot in b.")).toBeVisible();
+  });
+
+  it("shows a genuine zero as a score, collapsed", () => {
+    render(
+      <MyGradesPanel
+        grades={summary({
+          per_file: [grade({ id: 1, original_filename: "z.ipynb", score: 0 })],
+          combined_score: 0,
+        })}
+        error={null}
+        submission={SUBMISSION}
+        totalAssignmentFiles={1}
+      />,
+    );
+
+    // A real 0 must read as a score, never as "not graded".
+    expect(screen.getByText("0 / 10")).toBeVisible();
+    expect(screen.queryByText(/hasn't been graded yet/i)).not.toBeInTheDocument();
+  });
+
+  it("still shows ungraded as ungraded, with no collapsed rows at all", () => {
+    render(
+      <MyGradesPanel
+        grades={summary({ per_file: [], combined_score: 0 })}
+        error={null}
+        submission={SUBMISSION}
+        totalAssignmentFiles={1}
+      />,
+    );
+
+    // combined_score is 0.0 here too -- the distinction is per_file, and the
+    // collapse must not have blurred it.
+    expect(screen.getByText(/hasn't been graded yet/i)).toBeVisible();
+    expect(screen.queryByText("0 / 10")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 });
