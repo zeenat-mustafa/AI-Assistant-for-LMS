@@ -71,8 +71,9 @@ def _format_cells_for_prompt(cells: list[dict[str, Any]]) -> str:
 
 def call_gemini_for_rubric(prompt: str) -> str:
     """
-    Send *prompt* to the LLM provider (Gemini, with automatic Groq fallback on
-    quota/rate-limit errors) and return the raw response text.
+    Send *prompt* to the LLM provider (primary Gemini, with automatic fallback
+    to the secondary Gemini model on quota/rate-limit errors) and return the
+    raw response text.
     Raises RubricGenerationError on any failure — never crashes caller.
     """
     try:

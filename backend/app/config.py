@@ -16,33 +16,16 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 480  # 8 hours — convenient for a demo
 
-    # ── LLM: Gemini (primary) ─────────────────────────────────────────────────
+    # ── LLM: Gemini (two-tier, Gemini-only) ───────────────────────────────────
+    # The provider chain is two Gemini models and nothing else. The primary
+    # serves every call; on a quota/rate-limit error it falls back to the
+    # secondary. There is no fast/pro split any more — one pair handles every
+    # purpose. (Groq and Ollama were removed entirely; see llm_provider.py.)
     gemini_api_key: str = ""
-    # Fast model for high-volume calls (rubric generation, evaluation, feedback).
-    # gemini-flash-latest is Google's auto-updating alias for the newest Flash
-    # release (currently resolves to gemini-3.8-flash, the newest stable GA Flash
-    # as of 2026-09-02). Note: -latest may resolve to a preview release — pin to
-    # a specific stable endpoint (e.g. gemini-3.6-flash) if you need guaranteed
-    # stable behaviour.  Verify current models at https://ai.google.dev/models
-    gemini_fast_model: str = "gemini-flash-latest"
-    # Stronger model for low-volume reasoning tasks (ambiguous file matching).
-    # There is currently no stable GA Gemini pro model (gemini-3.1-pro is still
-    # Preview as of 2026-09-02).  gemini-3.8-flash is the most capable current
-    # stable GA model and is used here instead.  Switch to gemini-pro-latest once
-    # a stable pro model backs that alias.
-    gemini_pro_model: str = "gemini-3.1-pro-preview"
-
-    # ── LLM: Groq (fallback on Gemini quota/rate-limit errors) ───────────────
-    groq_api_key: str = ""
-    # llama-3.1-8b-instant / llama-3.3-70b-versatile were deprecated by Groq in
-    # June 2026; these are the current equivalents.
-    groq_fast_model: str = "openai/gpt-oss-20b"
-    # Stronger Groq model for reasoning fallback.
-    groq_pro_model: str = "openai/gpt-oss-120b"
-
-    # ── LLM: Ollama (fallback if both Gemini and Groq fail) ──────────────────
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1:8b"
+    # Primary model — serves every call regardless of purpose.
+    gemini_primary_model: str = "gemini-3.5-flash-lite"
+    # Fallback model — used only when the primary hits a quota/rate-limit error.
+    gemini_fallback_model: str = "gemini-3.1-flash-lite"
 
     # ── Demo seed users (MVP only — not for production) ───────────────────────
     demo_instructor_email: str = "instructor@demo.com"

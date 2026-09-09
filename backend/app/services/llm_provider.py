@@ -2,35 +2,34 @@
 LLM provider abstraction layer — Phase 2, Sub-feature 6.
 
 Centralises every LLM call behind a single public entry point: call_llm().
-Primary provider is Google Gemini; if a quota or rate-limit error is detected,
-the call is automatically retried against Groq. If Groq fails for ANY reason,
-the call falls through to a locally-running Ollama model before raising to
-the caller.
+The provider chain is two Gemini models and nothing else:
+
+  1. Primary   (settings.gemini_primary_model)  — serves every call.
+  2. Fallback  (settings.gemini_fallback_model) — used ONLY when the primary
+     hits a quota/rate-limit error.
+
+There is no Groq or Ollama tier any more, and no fast/pro model split: one
+primary/fallback pair handles every call regardless of ``purpose``.
 
 Public API
 ----------
-  call_llm(prompt, purpose) -> str
-      purpose is "fast" or "pro", selecting the appropriate model tier from
-      settings on both providers.
+  call_llm(prompt, purpose="fast") -> str
+      ``purpose`` is retained for logging/telemetry only — it no longer selects
+      a model (every call uses the same primary/fallback pair).
 
   LLMProviderError
-      Raised only when Gemini, Groq, AND Ollama all fail for the same prompt.
+      Raised only when BOTH Gemini models fail for the same prompt.
 
 Internal helpers (not part of public API)
 -----------------------------------------
   _is_quota_or_rate_limit_error(exc) -> bool
   _call_gemini(prompt, model_name) -> str
-  _call_groq(prompt, model_name) -> str
-  _call_ollama(prompt) -> str
 """
 
 import logging
-from typing import Literal
 
 import google.generativeai as genai
 import google.api_core.exceptions
-import httpx
-from groq import Groq
 
 from app.config import settings
 
@@ -42,7 +41,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class LLMProviderError(Exception):
-    """Raised when Gemini, Groq, and Ollama all fail for the same prompt."""
+    """Raised when both the primary and fallback Gemini models fail."""
     pass
 
 
@@ -53,17 +52,16 @@ class LLMProviderError(Exception):
 def _is_quota_or_rate_limit_error(exc: Exception) -> bool:
     """
     Return True if *exc* represents a quota or rate-limit condition that
-    warrants a provider fallback.
+    warrants falling back to the secondary model.
 
     Triggers on:
       - google.api_core.exceptions.ResourceExhausted (canonical Gemini quota type)
       - Any exception whose str() contains "quota", "rate limit", "429", or
-        "resource exhausted" (case-insensitive) — catches Groq HTTP 429s and
-        any provider that surfaces quota text in a generic exception message.
+        "resource exhausted" (case-insensitive).
 
     Returns False for all other errors (bad key, malformed request, etc.) —
-    those will fail the same way on the fallback provider, so retrying there
-    is pointless.
+    those would fail the same way on the fallback model, so retrying there is
+    pointless.
     """
     if isinstance(exc, google.api_core.exceptions.ResourceExhausted):
         return True
@@ -89,135 +87,81 @@ def _call_gemini(prompt: str, model_name: str) -> str:
     return response.text
 
 
-def _call_groq(prompt: str, model_name: str) -> str:
-    """
-    Call Groq with *model_name* and return the response text.
-
-    Uses the groq SDK's synchronous client, authenticating from
-    settings.groq_api_key. Raises whatever exception the SDK raises.
-    """
-    client = Groq(api_key=settings.groq_api_key)
-    completion = client.chat.completions.create(
-        model=model_name,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = completion.choices[0].message.content
-    if not text:
-        raise ValueError("Groq returned an empty response.")
-    return text
-
-
-def _call_ollama(prompt: str) -> str:
-    """
-    Call a locally-running Ollama server and return the response text.
-
-    No quota/rate-limit detection needed — local model has no quota.
-    Any failure raises LLMProviderError prefixed "Ollama call failed: ".
-    """
-    url = f"{settings.ollama_base_url}/api/generate"
-    payload = {"model": settings.ollama_model, "prompt": prompt, "stream": False}
-    try:
-        response = httpx.post(url, json=payload, timeout=60.0)
-        response.raise_for_status()
-        data = response.json()
-        text = data.get("response", "")
-        if not text:
-            raise ValueError("Ollama returned an empty 'response' field.")
-        return text
-    except Exception as exc:
-        raise LLMProviderError(f"Ollama call failed: {exc}") from exc
-
-
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def call_llm(prompt: str, purpose: Literal["fast", "pro"]) -> str:
+def call_llm(prompt: str, purpose: str = "fast") -> str:
     """
-    Send *prompt* to the configured LLM provider and return the response text.
+    Send *prompt* to Gemini and return the response text.
 
     Parameters
     ----------
     prompt:
         The full prompt string to send (callers own prompt construction).
     purpose:
-        ``"fast"`` → uses GEMINI_FAST_MODEL / GROQ_FAST_MODEL.
-        ``"pro"``  → uses GEMINI_PRO_MODEL  / GROQ_PRO_MODEL.
+        Free-text tag for logging/telemetry ONLY. It no longer selects a model
+        — every call uses ``settings.gemini_primary_model`` first and
+        ``settings.gemini_fallback_model`` as its quota fallback. Kept so the
+        existing call sites (all passing ``purpose="fast"``) need no change and
+        so log lines still carry the caller's intent.
 
     Fallback logic
     --------------
-    1. Try Gemini with the appropriate model.
+    1. Try the primary Gemini model.
        - Success → log INFO, return result.
-       - Quota/rate-limit error → log WARNING, fall through to Groq.
+       - Quota/rate-limit error → log WARNING, fall through to the fallback model.
        - Any other error (bad key, malformed request, …) → re-raise immediately;
-         no fallback, because the same error would occur on Groq too.
-    2. Try Groq with the appropriate model.
+         no fallback, because the same error would occur on the fallback model too.
+    2. Try the fallback Gemini model (only reached on a primary quota/rate-limit).
        - Success → log INFO, return result.
-       - Any failure (quota or otherwise) → log WARNING, fall through to Ollama.
-    3. Try Ollama (local model, no quota concept).
-       - Success → log INFO, return result.
-       - Any failure → log ERROR with all three failure reasons, raise LLMProviderError.
+       - Any failure → log ERROR with both failure reasons, raise LLMProviderError.
 
     Raises
     ------
     LLMProviderError
-        Only when Gemini, Groq, and Ollama all fail.
+        Only when both Gemini models fail.
     Any other exception
-        Re-raised directly when Gemini fails with a non-quota error.
+        Re-raised directly when the primary fails with a non-quota error.
     """
-    if purpose == "fast":
-        gemini_model = settings.gemini_fast_model
-        groq_model = settings.groq_fast_model
-    else:  # "pro"
-        gemini_model = settings.gemini_pro_model
-        groq_model = settings.groq_pro_model
+    primary_model = settings.gemini_primary_model
+    fallback_model = settings.gemini_fallback_model
 
-    # ── Step 1: try Gemini ────────────────────────────────────────────────────
-    gemini_error: Exception | None = None
+    # ── Step 1: try the primary Gemini model ─────────────────────────────────
+    primary_error: Exception | None = None
     try:
-        result = _call_gemini(prompt, gemini_model)
-        logger.info("LLM call served by gemini (%s), purpose=%s", gemini_model, purpose)
+        result = _call_gemini(prompt, primary_model)
+        logger.info(
+            "LLM call served by gemini primary (%s), purpose=%s",
+            primary_model, purpose,
+        )
         return result
     except Exception as exc:
         if not _is_quota_or_rate_limit_error(exc):
-            # Non-quota failure — re-raise immediately, do not try Groq.
+            # Non-quota failure — re-raise immediately, do not waste a fallback call.
             raise
-        gemini_error = exc
+        primary_error = exc
         logger.warning(
-            "Gemini quota/rate-limit hit for purpose=%s, falling back to Groq",
-            purpose,
+            "Gemini primary (%s) quota/rate-limit hit for purpose=%s, "
+            "falling back to %s",
+            primary_model, purpose, fallback_model,
         )
 
-    # ── Step 2: try Groq (only reached on Gemini quota/rate-limit) ───────────
-    groq_error: Exception | None = None
+    # ── Step 2: try the fallback Gemini model (only on a primary quota hit) ───
     try:
-        result = _call_groq(prompt, groq_model)
+        result = _call_gemini(prompt, fallback_model)
         logger.info(
-            "LLM call served by groq (%s), purpose=%s (fallback)", groq_model, purpose
+            "LLM call served by gemini fallback (%s), purpose=%s (fallback)",
+            fallback_model, purpose,
         )
         return result
-    except Exception as exc:
-        groq_error = exc
-        logger.warning(
-            "Groq failed for purpose=%s (%s), falling back to Ollama",
-            purpose, groq_error,
-        )
-
-    # ── Step 3: try Ollama (only reached on Groq failure) ────────────────────
-    try:
-        result = _call_ollama(prompt)
-        logger.info(
-            "LLM call served by ollama (%s), purpose=%s (fallback)",
-            settings.ollama_model, purpose,
-        )
-        return result
-    except Exception as ollama_exc:
+    except Exception as fallback_error:
         logger.error(
-            "Gemini, Groq, and Ollama all failed for purpose=%s: "
-            "gemini_error=%s, groq_error=%s, ollama_error=%s",
-            purpose, gemini_error, groq_error, ollama_exc,
+            "Both Gemini models failed for purpose=%s: "
+            "primary_error=%s, fallback_error=%s",
+            purpose, primary_error, fallback_error,
         )
         raise LLMProviderError(
-            f"Gemini, Groq, and Ollama all failed for purpose={purpose}: "
-            f"gemini_error={gemini_error}, groq_error={groq_error}, ollama_error={ollama_exc}"
-        ) from ollama_exc
+            f"Both Gemini models failed for purpose={purpose}: "
+            f"primary_error={primary_error}, fallback_error={fallback_error}"
+        ) from fallback_error

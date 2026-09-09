@@ -33,12 +33,12 @@ logger = logging.getLogger(__name__)
 
 
 # ── 0. User-facing error sanitisation ─────────────────────────────────────────
-# Stable substring of the message LLMProviderError raises when every provider
-# fails (see llm_provider.call_llm). It survives being re-wrapped by rubric.py
-# / evaluator.py ("LLM call failed: {exc}", "Failed to generate rubric: ..."),
-# so it reliably identifies an all-providers-failed condition however deep it
-# was caught.
-_ALL_PROVIDERS_FAILED_SIGNATURE = "Gemini, Groq, and Ollama all failed"
+# Stable substring of the message LLMProviderError raises when both Gemini
+# models fail (see llm_provider.call_llm). It survives being re-wrapped by
+# rubric.py / evaluator.py ("LLM call failed: {exc}", "Failed to generate
+# rubric: ..."), so it reliably identifies an all-Gemini-failed condition
+# however deep it was caught. Kept in sync with call_llm's message wording.
+_ALL_PROVIDERS_FAILED_SIGNATURE = "Both Gemini models failed"
 
 # Genuinely new, safe message — deliberately not a truncation of the raw text.
 _GRADING_UNAVAILABLE_MESSAGE = (
@@ -52,12 +52,12 @@ def _user_facing_error(raw: object) -> str:
     Convert an internal grading error into text safe to return in an API
     response.
 
-    When every LLM provider fails, the underlying error is a concatenation of
-    provider URLs, quota-metric names, org ids and retry-delay JSON from all
-    three providers — never fit to surface to a user, and previously rendered
-    verbatim in the chat panel. That single case is replaced wholesale with a
-    clean generic message; the full raw text is preserved in the logs by the
-    callers, which already log it before calling this.
+    When both Gemini models fail, the underlying error is a concatenation of
+    provider URLs, quota-metric names, org ids and retry-delay JSON — never fit
+    to surface to a user, and previously rendered verbatim in the chat panel.
+    That single case is replaced wholesale with a clean generic message; the
+    full raw text is preserved in the logs by the callers, which already log it
+    before calling this.
 
     Every other failure (a notebook that won't parse, a missing rubric row,
     an unmatched file) is short, safe, and useful, so it passes through

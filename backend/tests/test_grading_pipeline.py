@@ -269,14 +269,18 @@ class TestGradeSingleSubmissionFile:
 
     # -- bugfix-post-phase5, Fix 3: raw multi-provider error must be sanitised --
 
+    # Two-tier Gemini failure, re-wrapped as a string by the rubric path. Carries
+    # the raw internals of BOTH Gemini attempts — this is exactly what the
+    # sanitiser must strip.
     _RAW_ALL_PROVIDERS_FAILED = (
-        "Failed to generate rubric: LLM call failed: Gemini, Groq, and Ollama "
-        "all failed for purpose=fast: gemini_error=429 You exceeded your current "
-        "quota, quota_metric=\"generativelanguage.googleapis.com/generate_content_"
+        "Failed to generate rubric: LLM call failed: Both Gemini models failed "
+        "for purpose=fast: primary_error=429 You exceeded your current quota, "
+        "quota_metric=\"generativelanguage.googleapis.com/generate_content_"
         "free_tier_requests\", org_id=1234567890, "
         "links {url: \"https://ai.google.dev/gemini-api/docs/rate-limits\"}, "
-        "groq_error=rate_limit_exceeded https://console.groq.com/settings/billing, "
-        "ollama_error=Ollama call failed: [WinError 10061]"
+        "fallback_error=429 You exceeded your current quota, "
+        "quota_metric=\"generativelanguage.googleapis.com/generate_content_"
+        "free_tier_requests\", org_id=1234567890"
     )
 
     def _assert_clean(self, error_text):
@@ -284,8 +288,7 @@ class TestGradeSingleSubmissionFile:
         assert "temporarily unavailable" in error_text.lower()
         # ...and none of the raw provider internals leak through.
         for forbidden in (
-            "https://", "quota_metric", "org_id",
-            "console.groq.com", "ai.google.dev", "WinError",
+            "https://", "quota_metric", "org_id", "ai.google.dev",
         ):
             assert forbidden not in error_text, f"leaked: {forbidden!r}"
 

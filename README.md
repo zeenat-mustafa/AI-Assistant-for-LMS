@@ -11,7 +11,7 @@ Instructors create a **Session** for a given class day (e.g. "Week 8 Day 4") and
 - **Context-aware submission matching.** Each submitted notebook is matched to its corresponding assignment by comparing the substance of the work — the retained instructions and structure a student's edits preserve — giving reliable matching even across multiple assignments in the same session.
 - **Consistent, granular scoring.** All scores are expressed in clean 0.5-point increments, both at the rubric level and in final grades, for clarity and consistency across a class.
 - **Specific, criterion-level feedback.** Every grade includes a breakdown by rubric criterion — what was awarded, what was possible, and why — giving students clear, actionable feedback rather than a single opaque number.
-- **Resilient grading pipeline.** AI requests are served through a dual-provider system (Gemini primary, Groq as an automatic backup), and batch grading runs report progress per student and continue through the full class list even if an individual submission needs attention — keeping instructors informed without interrupting the run.
+- **Resilient grading pipeline.** AI requests are served through a two-tier Gemini system (a primary model, with automatic fallback to a second Gemini model on quota/rate-limit errors), and batch grading runs report progress per student and continue through the full class list even if an individual submission needs attention — keeping instructors informed without interrupting the run.
 
 ## Tech Stack
 
@@ -21,8 +21,8 @@ Instructors create a **Session** for a given class day (e.g. "Week 8 Day 4") and
 | Database | SQLite (SQLAlchemy ORM) |
 | File storage | Local filesystem, structured per-session |
 | Auth | JWT (bcrypt password hashing) |
-| AI — primary | Gemini API (`gemini-flash-latest` / `gemini-3.1-pro-preview`) |
-| AI — backup | Groq API |
+| AI — primary | Gemini API (`gemini-3.5-flash-lite`) |
+| AI — fallback | Gemini API (`gemini-3.1-flash-lite`, on quota/rate-limit) |
 | Notebook parsing | `nbformat`, recursive `.zip` extraction |
 | Session matching | Fuzzy text matching |
 | MCP server | Python MCP SDK |
@@ -42,8 +42,9 @@ cp .env.example .env
 ```
 Fill in `.env` with:
 - `GEMINI_API_KEY` — from [Google AI Studio](https://aistudio.google.com/app/apikey)
-- `GROQ_API_KEY` — from [Groq Console](https://console.groq.com/keys)
 - `SECRET_KEY` — generate one with `python -c "import secrets; print(secrets.token_hex(32))"`
+
+Optionally override the model names with `GEMINI_PRIMARY_MODEL` / `GEMINI_FALLBACK_MODEL` (they default to the two models above).
 
 **3. Run the server**
 ```bash
