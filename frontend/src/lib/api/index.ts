@@ -22,6 +22,9 @@ export {
   listAssignments,
   assignmentDownloadUrl,
   downloadAssignment,
+  listResources,
+  resourceDownloadUrl,
+  downloadResource,
   deleteAssignment,
   generateRubric,
 } from "./assignments";

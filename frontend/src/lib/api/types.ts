@@ -52,6 +52,43 @@ export interface UnsolvedFileRead {
   uploaded_at: string;
 }
 
+// -- Resource files (backend/app/schemas/resource_file.py) -------------------
+
+/**
+ * `ResourceFileRead` -- one non-notebook supporting file (dataset, slides,
+ * PDF) uploaded inside a `.zip` alongside or instead of notebooks.
+ *
+ * Structurally separate from `UnsolvedFileRead`, not a variant of it: the
+ * backend stores these in their own `resource_files` table. A resource is
+ * downloadable only -- it is never parsed, never file-matched, never given a
+ * rubric, and never counted toward a session's assignment total. It therefore
+ * has NO `rubric_generated` field, which is why the two are kept as distinct
+ * types rather than one type with a role flag.
+ */
+export interface ResourceFileRead {
+  id: number;
+  session_id: number;
+  original_filename: string;
+  uploaded_at: string;
+}
+
+/**
+ * `AssignmentUploadItem` -- one entry in POST /sessions/{id}/assignments'
+ * response, which is a unified view over BOTH tables.
+ *
+ * `file_role` is derived by the backend from which table the row landed in;
+ * it is not a stored column on either model. `rubric_generated` is always
+ * false for a resource.
+ */
+export interface AssignmentUploadItem {
+  id: number;
+  session_id: number;
+  original_filename: string;
+  file_role: "notebook" | "resource";
+  rubric_generated: boolean;
+  uploaded_at: string;
+}
+
 // -- Sessions (backend/app/schemas/session.py) -------------------------------
 
 /** `SessionRead` -- full session detail including its assignment files. */
@@ -60,7 +97,13 @@ export interface SessionRead {
   title: string;
   instructor_id: number | null;
   created_at: string;
+  /** Gradeable notebooks only -- resources never appear here. */
   unsolved_files: UnsolvedFileRead[];
+  /**
+   * Downloadable-only supporting files. Defaults to `[]` on the backend, so
+   * a session with no resource uploads returns an empty array, not null.
+   */
+  resource_files: ResourceFileRead[];
 }
 
 /** `SessionList` -- paginated session listing. */

@@ -112,6 +112,7 @@ describe("apiFetch — responses", () => {
           instructor_id: 1,
           created_at: "2026-09-01T10:00:00",
           unsolved_files: [],
+          resource_files: [],
         },
       ],
     } satisfies SessionList);

@@ -58,6 +58,7 @@ function session(overrides: Partial<SessionRead> = {}): SessionRead {
     instructor_id: 1,
     created_at: "2026-09-06T15:43:53.245057",
     unsolved_files: [],
+    resource_files: [],
     ...overrides,
   };
 }

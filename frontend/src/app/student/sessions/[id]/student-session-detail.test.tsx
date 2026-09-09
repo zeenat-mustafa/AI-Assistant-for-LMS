@@ -8,7 +8,13 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { ApiError } from "@/lib/api";
-import type { SessionRead, SubmissionRead, UnsolvedFileRead, UserRead } from "@/lib/api";
+import type {
+  ResourceFileRead,
+  SessionRead,
+  SubmissionRead,
+  UnsolvedFileRead,
+  UserRead,
+} from "@/lib/api";
 
 const replace = vi.fn();
 vi.mock("next/navigation", () => ({
@@ -70,13 +76,17 @@ function file(overrides: Partial<UnsolvedFileRead> = {}): UnsolvedFileRead {
   };
 }
 
-function sessionWith(files: UnsolvedFileRead[]): SessionRead {
+function sessionWith(
+  files: UnsolvedFileRead[],
+  resources: ResourceFileRead[] = [],
+): SessionRead {
   return {
     id: 3,
     title: "Week 2 Day 1",
     instructor_id: 1,
     created_at: "2026-09-06T15:35:00",
     unsolved_files: files,
+    resource_files: resources,
   };
 }
 
