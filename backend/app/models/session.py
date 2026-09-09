@@ -39,6 +39,9 @@ class LMSSession(Base):
     unsolved_files: Mapped[list["UnsolvedFile"]] = relationship(  # noqa: F821
         "UnsolvedFile", back_populates="session", cascade="all, delete-orphan"
     )
+    resource_files: Mapped[list["ResourceFile"]] = relationship(  # noqa: F821
+        "ResourceFile", back_populates="session", cascade="all, delete-orphan"
+    )
     submissions: Mapped[list["Submission"]] = relationship(  # noqa: F821
         "Submission", back_populates="session", cascade="all, delete-orphan"
     )

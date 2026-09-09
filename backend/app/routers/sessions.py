@@ -19,6 +19,7 @@ from app.models.unsolved_file import UnsolvedFile
 from app.models.user import User
 from app.schemas.session import SessionCreate, SessionList, SessionRead
 from app.schemas.unsolved_file import UnsolvedFileRead
+from app.schemas.resource_file import ResourceFileRead
 from app.services.auth import get_current_user, require_instructor
 from app.services.storage import delete_session_storage
 
@@ -35,6 +36,9 @@ def _session_read(session: LMSSession) -> SessionRead:
         created_at=session.created_at,
         unsolved_files=[
             UnsolvedFileRead.from_orm_model(f) for f in session.unsolved_files
+        ],
+        resource_files=[
+            ResourceFileRead.from_orm_model(f) for f in session.resource_files
         ],
     )
 

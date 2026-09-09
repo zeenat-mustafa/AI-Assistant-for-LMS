@@ -3,6 +3,7 @@
 from app.models.user import User
 from app.models.session import LMSSession
 from app.models.unsolved_file import UnsolvedFile
+from app.models.resource_file import ResourceFile
 from app.models.submission import Submission
 from app.models.submission_file import SubmissionFile
 from app.models.grade import Grade
@@ -11,6 +12,7 @@ __all__ = [
     "User",
     "LMSSession",
     "UnsolvedFile",
+    "ResourceFile",
     "Submission",
     "SubmissionFile",
     "Grade",

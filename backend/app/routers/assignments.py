@@ -21,8 +21,10 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.session import LMSSession
 from app.models.unsolved_file import UnsolvedFile
+from app.models.resource_file import ResourceFile
 from app.models.user import User
 from app.schemas.unsolved_file import UnsolvedFileRead
+from app.schemas.resource_file import AssignmentUploadItem, ResourceFileRead
 from app.services.auth import get_current_user, require_instructor
 from app.services.storage import (
     absolute_path,
@@ -61,25 +63,44 @@ def _get_file_or_404(file_id: int, session_id: int, db: Session) -> UnsolvedFile
     return f
 
 
-async def _collect_notebooks(uploads: list[UploadFile]) -> list[tuple[str, bytes]]:
+def _get_resource_or_404(resource_id: int, session_id: int, db: Session) -> ResourceFile:
+    r = db.get(ResourceFile, resource_id)
+    if r is None or r.session_id != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Resource file {resource_id} not found in session {session_id}.",
+        )
+    return r
+
+
+async def _collect_files(
+    uploads: list[UploadFile],
+) -> tuple[list[tuple[str, bytes]], list[tuple[str, bytes]]]:
     """
-    Expand a list of uploaded files into a flat list of (filename, bytes) pairs,
-    one entry per .ipynb notebook found.
+    Expand uploaded files into two flat lists of (filename, bytes) pairs:
+    gradeable notebooks and downloadable resource files.
 
     Rules:
-    - A .ipynb upload is passed through as-is.
-    - A .zip upload is extracted recursively via extract_notebooks_from_zip;
-      every .ipynb inside is included regardless of folder depth.
-      Non-.ipynb entries are silently ignored (consistent with student submissions).
-    - Any other extension raises HTTP 422 immediately.
-    - A .zip that contains no .ipynb files raises HTTP 422.
+    - A .ipynb upload is a notebook, passed through as-is.
+    - A .zip upload is extracted (any folder depth): every .ipynb inside is a
+      notebook, every other real file is a resource (a dataset the notebook
+      reads, slides, a reference PDF, …). Directories and __MACOSX metadata
+      are skipped.
+    - Any other direct upload extension raises HTTP 422 — resources arrive
+      bundled in a .zip alongside (or instead of) notebooks, not as a bare
+      non-notebook upload. This keeps the direct-upload contract unchanged.
+    - A .zip that contains NEITHER a notebook NOR any resource file raises
+      HTTP 422 (nothing to store); previously a zip with no notebooks was
+      rejected even if it carried resources — that is the behaviour this fix
+      changes.
 
-    The existing extract_notebooks_from_zip from services/notebook.py is reused
-    here — no extraction logic is duplicated.
+    Notebooks and resources are stored in structurally separate tables by the
+    caller (UnsolvedFile vs ResourceFile); only notebooks are ever gradeable.
     """
-    from app.services.notebook import extract_notebooks_from_zip
+    from app.services.notebook import extract_files_from_zip
 
     notebooks: list[tuple[str, bytes]] = []
+    resources: list[tuple[str, bytes]] = []
 
     for upload in uploads:
         suffix = Path(upload.filename or "").suffix.lower()
@@ -87,8 +108,9 @@ async def _collect_notebooks(uploads: list[UploadFile]) -> list[tuple[str, bytes
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(
-                    f"Only .ipynb or .zip files are accepted for assignment upload. "
-                    f"Got: '{suffix}'"
+                    f"Only .ipynb or .zip files can be uploaded directly. "
+                    f"Got: '{suffix}'. Bundle datasets or other resource files "
+                    f"inside a .zip alongside your notebooks."
                 ),
             )
 
@@ -98,34 +120,64 @@ async def _collect_notebooks(uploads: list[UploadFile]) -> list[tuple[str, bytes
             notebooks.append((upload.filename, data))
 
         else:  # .zip
-            # Extract to a temporary directory, read each notebook's bytes,
-            # then let the TemporaryDirectory be cleaned up automatically.
             with tempfile.TemporaryDirectory() as tmp_dir:
-                extracted = extract_notebooks_from_zip(data, tmp_dir)
-                if not extracted:
+                nb_paths, res_paths = extract_files_from_zip(data, tmp_dir)
+                if not nb_paths and not res_paths:
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                         detail=(
-                            f"The zip archive '{upload.filename}' contains no .ipynb files."
+                            f"The zip archive '{upload.filename}' contains no "
+                            f"usable files (no notebooks and no resource files)."
                         ),
                     )
-                for nb_path in extracted:
-                    # Read bytes inside the context manager before cleanup.
+                # Read bytes inside the context manager, before cleanup.
+                for nb_path in nb_paths:
                     notebooks.append((nb_path.name, nb_path.read_bytes()))
+                for res_path in res_paths:
+                    resources.append((res_path.name, res_path.read_bytes()))
 
-    return notebooks
+    return notebooks, resources
+
+
+def _existing_filename_conflict(
+    session_id: int, filename: str, db: Session
+) -> bool:
+    """True if *filename* already exists in this session as EITHER a notebook
+    or a resource — the duplicate guard spans both tables since they share one
+    on-disk directory keyed by original_filename."""
+    in_notebooks = (
+        db.query(UnsolvedFile)
+        .filter(
+            UnsolvedFile.session_id == session_id,
+            UnsolvedFile.original_filename == filename,
+        )
+        .first()
+    )
+    if in_notebooks:
+        return True
+    in_resources = (
+        db.query(ResourceFile)
+        .filter(
+            ResourceFile.session_id == session_id,
+            ResourceFile.original_filename == filename,
+        )
+        .first()
+    )
+    return in_resources is not None
 
 
 # ── Upload ────────────────────────────────────────────────────────────────────
 
 @router.post(
     "",
-    response_model=list[UnsolvedFileRead],
+    response_model=list[AssignmentUploadItem],
     status_code=status.HTTP_201_CREATED,
     summary=(
         "Upload assignment file(s) to a session (instructor only). "
-        "Accepts one or more .ipynb files in a single multipart request, or a .zip "
-        "archive that is recursively extracted. Returns a list of all created records."
+        "Accepts one or more .ipynb notebooks, or a .zip archive that is "
+        "recursively extracted — .ipynb files become gradeable notebooks and "
+        "any other files become downloadable resources. Returns every created "
+        "record, each tagged with its file_role (notebook | resource)."
     ),
 )
 async def upload_assignment(
@@ -134,16 +186,16 @@ async def upload_assignment(
         list[UploadFile],
         File(
             description=(
-                "One or more .ipynb notebook files, or a single .zip archive "
-                "containing .ipynb files at any folder depth. "
-                "For a single file upload, supply exactly one entry — the response "
-                "is always a list, preserving a consistent contract."
+                "One or more .ipynb notebook files, or a single .zip archive. "
+                "A .zip may contain notebooks at any folder depth plus supporting "
+                "resource files (datasets, PDFs, slides); notebooks are gradeable, "
+                "resources are downloadable only."
             )
         ),
     ],
     db: Annotated[Session, Depends(get_db)],
     _instructor: Annotated[User, Depends(require_instructor)],
-) -> list[UnsolvedFileRead]:
+) -> list[AssignmentUploadItem]:
     _get_session_or_404(session_id, db)
 
     if not files:
@@ -152,36 +204,31 @@ async def upload_assignment(
             detail="At least one file must be uploaded.",
         )
 
-    # Expand all uploads into (filename, bytes) pairs for every .ipynb found.
-    notebooks = await _collect_notebooks(files)
+    # Expand uploads into gradeable notebooks and downloadable resource files.
+    notebooks, resources = await _collect_files(files)
 
-    # Duplicate-filename guard — check before persisting anything so the
-    # entire request fails atomically on any conflict (no partial writes).
-    for filename, _ in notebooks:
-        existing = (
-            db.query(UnsolvedFile)
-            .filter(
-                UnsolvedFile.session_id == session_id,
-                UnsolvedFile.original_filename == filename,
-            )
-            .first()
-        )
-        if existing:
+    # Duplicate-filename guard — spans BOTH notebooks and resources, since they
+    # share one on-disk directory keyed by original_filename. Checked before
+    # persisting anything so the request fails atomically on any conflict (no
+    # partial writes), matching 5.3's proven behaviour.
+    for filename, _ in [*notebooks, *resources]:
+        if _existing_filename_conflict(session_id, filename, db):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    f"An assignment file named '{filename}' already exists "
+                    f"A file named '{filename}' already exists "
                     f"in session {session_id}. Delete it first or use a different name."
                 ),
             )
 
-    # Persist each notebook: save bytes to disk + create one UnsolvedFile row.
-    # parse requirements text at upload time (same as original single-file flow)
-    # so it is available immediately for rubric generation and file matching.
-    created: list[UnsolvedFile] = []
+    created: list[AssignmentUploadItem] = []
+    created_notebooks: list[UnsolvedFile] = []
+    created_resources: list[ResourceFile] = []
+
+    # Persist notebooks: parse requirements text at upload time (as before) so
+    # it is available immediately for rubric generation and file matching.
     for filename, data in notebooks:
         rel_path = await save_assignment_file(session_id, filename, data)
-
         parsed_text: str | None = None
         try:
             from app.services.notebook import extract_requirements_text
@@ -190,7 +237,6 @@ async def upload_assignment(
             logger.warning(
                 "Could not parse requirements text from %s: %s", filename, exc
             )
-
         unsolved = UnsolvedFile(
             session_id=session_id,
             original_filename=filename,
@@ -198,14 +244,31 @@ async def upload_assignment(
             parsed_requirements_text=parsed_text,
         )
         db.add(unsolved)
-        created.append(unsolved)
-        logger.info("Assignment file uploaded: %s → session %d", filename, session_id)
+        created_notebooks.append(unsolved)
+        logger.info("Assignment notebook uploaded: %s → session %d", filename, session_id)
+
+    # Persist resources into the separate ResourceFile table — never parsed,
+    # matched, given a rubric, or counted toward the session's assignment total.
+    for filename, data in resources:
+        rel_path = await save_assignment_file(session_id, filename, data)
+        resource = ResourceFile(
+            session_id=session_id,
+            original_filename=filename,
+            file_path=rel_path,
+        )
+        db.add(resource)
+        created_resources.append(resource)
+        logger.info("Resource file uploaded: %s → session %d", filename, session_id)
 
     db.commit()
-    for u in created:
+    for u in created_notebooks:
         db.refresh(u)
+        created.append(AssignmentUploadItem.from_notebook(u))
+    for r in created_resources:
+        db.refresh(r)
+        created.append(AssignmentUploadItem.from_resource(r))
 
-    return [UnsolvedFileRead.from_orm_model(u) for u in created]
+    return created
 
 
 # ── List ──────────────────────────────────────────────────────────────────────
@@ -253,6 +316,53 @@ def download_assignment(
     return FileResponse(
         path=str(abs_path),
         filename=f.original_filename,
+        media_type="application/octet-stream",
+    )
+
+
+# ── Resource files (supporting material) ──────────────────────────────────────
+
+@router.get(
+    "/resources",
+    response_model=list[ResourceFileRead],
+    summary="List a session's resource (non-notebook) files",
+)
+def list_resources(
+    session_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _user: Annotated[User, Depends(get_current_user)],
+) -> list[ResourceFileRead]:
+    _get_session_or_404(session_id, db)
+    files = (
+        db.query(ResourceFile)
+        .filter(ResourceFile.session_id == session_id)
+        .order_by(ResourceFile.uploaded_at)
+        .all()
+    )
+    return [ResourceFileRead.from_orm_model(f) for f in files]
+
+
+@router.get(
+    "/resources/{resource_id}/download",
+    summary="Download a resource file",
+    response_class=FileResponse,
+)
+def download_resource(
+    session_id: int,
+    resource_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _user: Annotated[User, Depends(get_current_user)],
+) -> FileResponse:
+    r = _get_resource_or_404(resource_id, session_id, db)
+    abs_path = absolute_path(r.file_path)
+    if not abs_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File is recorded in the database but not found on disk.",
+        )
+    return FileResponse(
+        path=str(abs_path),
+        filename=r.original_filename,
         media_type="application/octet-stream",
     )
 

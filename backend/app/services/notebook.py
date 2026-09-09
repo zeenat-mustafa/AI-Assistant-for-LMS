@@ -377,6 +377,88 @@ def extract_notebooks_from_zip(
     return found
 
 
+def extract_files_from_zip(
+    source: Union[bytes, str, Path],
+    extract_dir: Union[str, Path],
+) -> tuple[list[Path], list[Path]]:
+    """
+    Extract every real file from a ZIP archive, split into notebooks and
+    resources.
+
+    Like ``extract_notebooks_from_zip`` (which it deliberately leaves
+    untouched, since the grading paths depend on that function's
+    notebooks-only behaviour), but returns BOTH ``.ipynb`` files and every
+    other file, so an instructor can bundle supporting material (a dataset a
+    notebook reads, slides, a reference PDF) alongside the gradeable
+    notebooks. Directories and macOS ``__MACOSX`` metadata are skipped in
+    both categories.
+
+    Returns
+    -------
+    tuple[list[Path], list[Path]]
+        ``(notebook_paths, resource_paths)`` — absolute paths under
+        ``extract_dir``. Either list may be empty. Never raises; failures are
+        logged and the affected entry is skipped.
+    """
+    extract_path = Path(extract_dir)
+    notebooks: list[Path] = []
+    resources: list[Path] = []
+
+    try:
+        extract_path.mkdir(parents=True, exist_ok=True)
+
+        if isinstance(source, (bytes, bytearray)):
+            buf = io.BytesIO(source)
+            if not zipfile.is_zipfile(io.BytesIO(source)):
+                logger.warning(
+                    "extract_files_from_zip: source bytes are not a valid ZIP file."
+                )
+                return notebooks, resources
+            buf.seek(0)
+            zip_file_obj = zipfile.ZipFile(buf)
+        else:
+            src_path = Path(source)
+            if not zipfile.is_zipfile(src_path):
+                logger.warning(
+                    "extract_files_from_zip: '%s' is not a valid ZIP file.", src_path
+                )
+                return notebooks, resources
+            zip_file_obj = zipfile.ZipFile(src_path)
+
+        with zip_file_obj as zf:
+            for member in zf.infolist():
+                if member.is_dir():
+                    continue
+                member_path = Path(member.filename)
+                if any(part.startswith("__MACOSX") for part in member_path.parts):
+                    continue
+                if not member_path.name:  # defensive: entries ending in "/"
+                    continue
+
+                is_notebook = member_path.suffix.lower() == ".ipynb"
+                bucket = notebooks if is_notebook else resources
+                safe_name = _safe_extract_name(
+                    member_path.name, extract_path, notebooks + resources
+                )
+                dest = extract_path / safe_name
+                try:
+                    dest.write_bytes(zf.read(member.filename))
+                    bucket.append(dest.resolve())
+                except Exception as exc:
+                    logger.warning(
+                        "Could not extract '%s' from zip: %s", member.filename, exc
+                    )
+
+    except zipfile.BadZipFile as exc:
+        logger.warning("extract_files_from_zip: not a valid ZIP file: %s", exc)
+    except Exception as exc:
+        logger.warning(
+            "extract_files_from_zip: unexpected error: %s", exc, exc_info=True
+        )
+
+    return notebooks, resources
+
+
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------

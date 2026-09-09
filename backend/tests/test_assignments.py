@@ -17,8 +17,8 @@ Upload behaviour
   2.  Multiple .ipynb files in one call → list with all records created
   3.  .zip with notebooks at archive root → all extracted and returned
   4.  .zip with notebooks 2+ folders deep → recursive extraction
-  5.  .zip with mixed files (non-.ipynb ignored) → only notebooks returned
-  6.  .zip with no .ipynb files → 422 with clear message
+  5.  .zip with mixed files → notebooks (UnsolvedFile) + resources (ResourceFile) (Fix 2)
+  6.  .zip with only resources → accepted; only junk → 422 (Fix 2)
   7.  Duplicate filename within session → 409 (whole request rejected atomically)
   8.  Invalid extension (.py) → 422
   9.  Student cannot upload → 403
@@ -47,6 +47,7 @@ from app.database import Base, get_db
 from app.main import app
 from app.models.session import LMSSession
 from app.models.unsolved_file import UnsolvedFile
+from app.models.resource_file import ResourceFile
 from app.models.user import User, UserRole
 from app.services.auth import create_access_token
 
@@ -279,10 +280,12 @@ class TestUploadAssignment:
 
     # ── 5. .zip with mixed files — non-.ipynb silently ignored ─────────────────
 
-    def test_zip_non_notebook_files_ignored(self, client, db):
+    def test_zip_non_notebook_files_stored_as_resources(self, client, db):
         """
-        .py, .csv, .png, .txt entries in the archive are silently skipped;
-        only the single .ipynb is returned.
+        bugfix-post-phase5, Fix 2: non-notebook entries in the archive are now
+        STORED as resource files (in the separate ResourceFile table), not
+        silently dropped. The .ipynb is a gradeable notebook; the rest are
+        resources. All are returned, each tagged with its derived file_role.
         """
         c, instr_token, _ = client
         nb = _make_notebook_bytes(markdown_cells=["# Only notebook"])
@@ -290,8 +293,7 @@ class TestUploadAssignment:
             "assignment.ipynb": nb,
             "helper.py":        b"def foo(): pass",
             "data.csv":         b"col1,col2\n1,2",
-            "image.png":        bytes(range(50)),
-            "README.txt":       b"ignore me",
+            "README.txt":       b"read me",
         })
 
         with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
@@ -302,31 +304,61 @@ class TestUploadAssignment:
             )
 
         assert res.status_code == 201
-        data = res.json()
-        assert len(data) == 1
-        assert data[0]["original_filename"] == "assignment.ipynb"
+        by_name = {d["original_filename"]: d for d in res.json()}
+        assert by_name["assignment.ipynb"]["file_role"] == "notebook"
+        assert by_name["helper.py"]["file_role"] == "resource"
+        assert by_name["data.csv"]["file_role"] == "resource"
+        assert by_name["README.txt"]["file_role"] == "resource"
+        assert by_name["data.csv"]["rubric_generated"] is False
 
-    # ── 6. .zip with no .ipynb files → 422 ────────────────────────────────────
+        # Structural separation: exactly one gradeable notebook in UnsolvedFile...
+        notebooks = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
+        assert [n.original_filename for n in notebooks] == ["assignment.ipynb"]
+        # ...and the three resources live in the separate ResourceFile table.
+        resources = db.query(ResourceFile).filter(ResourceFile.session_id == 10).all()
+        assert {r.original_filename for r in resources} == {"helper.py", "data.csv", "README.txt"}
 
-    def test_zip_with_no_notebooks_returns_422(self, client, db):
-        """A zip that has only .py / .md files is rejected with a clear 422."""
+    # ── 6. .zip with only resources (no notebooks) → accepted ─────────────────
+
+    def test_zip_with_only_resources_is_accepted(self, client, db):
+        """
+        bugfix-post-phase5, Fix 2: a zip with zero notebooks but at least one
+        other file is now accepted, storing the non-notebook files as
+        resources rather than rejecting the whole upload.
+        """
         c, instr_token, _ = client
-        zip_bytes = _make_zip({"script.py": b"pass", "README.md": b"# readme"})
+        zip_bytes = _make_zip({"script.py": b"pass", "notes.md": b"# notes"})
+
+        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
+            res = c.post(
+                "/api/v1/sessions/10/assignments",
+                files=[("files", ("resources_only.zip", zip_bytes, "application/zip"))],
+                headers={"Authorization": f"Bearer {instr_token}"},
+            )
+
+        assert res.status_code == 201
+        data = res.json()
+        assert {d["original_filename"] for d in data} == {"script.py", "notes.md"}
+        assert all(d["file_role"] == "resource" for d in data)
+        # No gradeable notebooks were created.
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all() == []
+        assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).count() == 2
+
+    def test_zip_with_nothing_usable_returns_422(self, client, db):
+        """A zip with only skippable entries (__MACOSX metadata) still 422s."""
+        c, instr_token, _ = client
+        zip_bytes = _make_zip({"__MACOSX/._x": b"junk"})
 
         res = c.post(
             "/api/v1/sessions/10/assignments",
-            files=[("files", ("empty_notebooks.zip", zip_bytes, "application/zip"))],
+            files=[("files", ("empty.zip", zip_bytes, "application/zip"))],
             headers={"Authorization": f"Bearer {instr_token}"},
         )
 
         assert res.status_code == 422
-        detail = res.json()["detail"].lower()
-        # message must mention the zip name and the absence of notebooks
-        assert "no .ipynb" in detail or "contains no" in detail
-
-        # No DB rows should have been created
-        rows = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
-        assert rows == []
+        assert "no usable files" in res.json()["detail"].lower()
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all() == []
+        assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).all() == []
 
     # ── 7. Duplicate filename → 409 (whole request rejected atomically) ─────────
 
@@ -500,3 +532,142 @@ class TestUploadAssignment:
         assert db_row.original_filename == item["original_filename"] == "assign.ipynb"
         assert item["rubric_generated"] is False
         assert db_row.rubric_json is None
+
+
+# ===========================================================================
+# bugfix-post-phase5, Fix 2 (ResourceFile table): resources are stored in a
+# structurally separate table, so they never enter grading paths.
+# ===========================================================================
+
+class TestResourceFileHandling:
+    def test_resources_excluded_from_assignment_count_structurally(self, client, db):
+        """The combined-score DENOMINATOR counts notebooks only. With resources
+        in their own table, _get_total_assignment_count is UNCHANGED from before
+        Fix 2 (queries UnsolvedFile) and simply never sees them."""
+        from app.routers.grades import _get_total_assignment_count
+
+        c, instr_token, _ = client
+        nb = _make_notebook_bytes(markdown_cells=["# HW"])
+        zip_bytes = _make_zip({"hw.ipynb": nb, "dataset.csv": b"a,b\n1,2"})
+        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
+            res = c.post(
+                "/api/v1/sessions/10/assignments",
+                files=[("files", ("bundle.zip", zip_bytes, "application/zip"))],
+                headers={"Authorization": f"Bearer {instr_token}"},
+            )
+        assert res.status_code == 201
+        # One notebook + one resource stored across the two tables.
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).count() == 1
+        assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).count() == 1
+        # The denominator is 1 — the resource is not in the table it queries.
+        assert _get_total_assignment_count(10, db) == 1
+
+    def test_resource_not_in_match_candidate_pool(self, client, db):
+        """The matcher builds its candidate pool from UnsolvedFile; a resource
+        is in a different table, so it can never be a match candidate."""
+        c, instr_token, _ = client
+        nb = _make_notebook_bytes(markdown_cells=["# HW"])
+        zip_bytes = _make_zip({"hw.ipynb": nb, "notes.pdf": b"%PDF-1.4 fake"})
+        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
+            c.post(
+                "/api/v1/sessions/10/assignments",
+                files=[("files", ("bundle.zip", zip_bytes, "application/zip"))],
+                headers={"Authorization": f"Bearer {instr_token}"},
+            )
+        candidates = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
+        assert [c_.original_filename for c_ in candidates] == ["hw.ipynb"]
+
+    def test_duplicate_name_across_tables_rejected_atomically(self, client, db):
+        """The duplicate guard spans BOTH tables: re-uploading a name already
+        used by a notebook OR a resource rejects the whole batch, atomically."""
+        c, instr_token, _ = client
+        nb = _make_notebook_bytes(markdown_cells=["# HW"])
+
+        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
+            first = c.post(
+                "/api/v1/sessions/10/assignments",
+                files=[("files", ("r.zip", _make_zip({"data.csv": b"a,b"}), "application/zip"))],
+                headers={"Authorization": f"Bearer {instr_token}"},
+            )
+        assert first.status_code == 201
+        nb_before = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).count()
+        res_before = db.query(ResourceFile).filter(ResourceFile.session_id == 10).count()
+
+        # New notebook + a resource name that collides with the stored data.csv.
+        clash = _make_zip({"new.ipynb": nb, "data.csv": b"x,y"})
+        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
+            res = c.post(
+                "/api/v1/sessions/10/assignments",
+                files=[("files", ("clash.zip", clash, "application/zip"))],
+                headers={"Authorization": f"Bearer {instr_token}"},
+            )
+        assert res.status_code == 409
+        assert "data.csv" in res.json()["detail"]
+        # Nothing new written to EITHER table — new.ipynb must not have landed.
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).count() == nb_before
+        assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).count() == res_before
+
+    def test_resource_download_and_listing(self, client, db):
+        """Resources are downloadable and listed via their own endpoints."""
+        c, instr_token, _ = client
+        zip_bytes = _make_zip({"dataset.csv": b"a,b\n1,2"})
+        # Use the real save so the file exists on disk for download.
+        res = c.post(
+            "/api/v1/sessions/10/assignments",
+            files=[("files", ("r.zip", zip_bytes, "application/zip"))],
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert res.status_code == 201
+        rid = res.json()[0]["id"]
+
+        listed = c.get(
+            "/api/v1/sessions/10/assignments/resources",
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert listed.status_code == 200
+        assert [r["original_filename"] for r in listed.json()] == ["dataset.csv"]
+
+        dl = c.get(
+            f"/api/v1/sessions/10/assignments/resources/{rid}/download",
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert dl.status_code == 200
+        assert dl.content == b"a,b\n1,2"
+
+    def test_session_detail_splits_notebooks_and_resources(self, client, db):
+        """SessionRead exposes unsolved_files (notebooks) and resource_files
+        (resources) separately."""
+        c, instr_token, _ = client
+        nb = _make_notebook_bytes(markdown_cells=["# HW"])
+        zip_bytes = _make_zip({"hw.ipynb": nb, "slides.pdf": b"%PDF fake", "data.csv": b"a,b"})
+        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
+            c.post(
+                "/api/v1/sessions/10/assignments",
+                files=[("files", ("bundle.zip", zip_bytes, "application/zip"))],
+                headers={"Authorization": f"Bearer {instr_token}"},
+            )
+        detail = c.get(
+            "/api/v1/sessions/10",
+            headers={"Authorization": f"Bearer {instr_token}"},
+        ).json()
+        assert [f["original_filename"] for f in detail["unsolved_files"]] == ["hw.ipynb"]
+        assert {f["original_filename"] for f in detail["resource_files"]} == {"slides.pdf", "data.csv"}
+
+    def test_pure_notebook_zip_unchanged(self, client, db):
+        """Regression: a zip of only notebooks behaves exactly as before —
+        every entry a gradeable notebook, no resource rows created."""
+        c, instr_token, _ = client
+        nb1 = _make_notebook_bytes(markdown_cells=["# One"])
+        nb2 = _make_notebook_bytes(markdown_cells=["# Two"])
+        zip_bytes = _make_zip({"a.ipynb": nb1, "b.ipynb": nb2})
+        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
+            res = c.post(
+                "/api/v1/sessions/10/assignments",
+                files=[("files", ("nbs.zip", zip_bytes, "application/zip"))],
+                headers={"Authorization": f"Bearer {instr_token}"},
+            )
+        assert res.status_code == 201
+        data = res.json()
+        assert {d["original_filename"] for d in data} == {"a.ipynb", "b.ipynb"}
+        assert all(d["file_role"] == "notebook" for d in data)
+        assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).all() == []
