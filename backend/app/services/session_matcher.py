@@ -100,6 +100,21 @@ def _token_similarity(a: str, b: str) -> float:
     completely different week/day, not a "close" one, so it gets none of
     the partial credit a word typo would.
 
+    A token carrying a number can ONLY be credited by another token carrying
+    a number: if exactly one side has a numeric part (e.g. title "week7" vs
+    the instruction's filler word "grade"), the pair scores 0 rather than
+    falling through to fuzzy character overlap. Found via real dev-data
+    testing: with the exact-match rule only applied when BOTH sides had a
+    number, a title's unmatched number token ("week7", for a nonexistent
+    Week 7) could still earn ~0.2 fuzzy credit against an unrelated
+    non-numeric word left over in the instruction (the verb "grade"), which
+    was enough to push "grade week 7 day 2" to 0.60 and report a false
+    "ambiguous" — while the same instruction without the verb ("week 7 day
+    2") correctly scored 0.50 and returned no_match. Closing this hole makes
+    the two forms identical and stops a wrong week/day number from being
+    quietly absorbed by any spare filler word. A week/day number is a
+    discrete identifier, not a fuzzy-matchable string.
+
     Word-only tokens (no numeric part on either side) keep the existing
     fuzzy SequenceMatcher behavior — typos/partial word matches are a real,
     valid case there and are left alone.
@@ -107,7 +122,9 @@ def _token_similarity(a: str, b: str) -> float:
     a_word, a_num = _split_word_number(a)
     b_word, b_num = _split_word_number(b)
 
-    if a_num and b_num:
+    if a_num or b_num:
+        # At least one side is a number-bearing token. A number can only be
+        # matched by the same number, never by a plain word.
         if a_num != b_num:
             return 0.0
         if not a_word and not b_word:

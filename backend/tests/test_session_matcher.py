@@ -329,3 +329,72 @@ def test_sessions_scoped_to_instructor(db):
     assert result_a["session_id"] == 1
     assert result_b["status"] == "matched"
     assert result_b["session_id"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 8. Post-Phase-5 regression: a wrong week/day number must never fuzzy-match
+#    off a spare filler word (bugfix-post-phase5, Fix 1)
+# ---------------------------------------------------------------------------
+
+def _seed_week_day_grid(db):
+    """A realistic set of Week N Day M sessions for one instructor."""
+    instructor = _make_instructor(db, user_id=1)
+    titles = [
+        (1, "Week 1 Day 1"), (2, "Week 1 Day 2"),
+        (3, "Week 2 Day 1"), (4, "Week 2 Day 2"),
+        (5, "Week 3 Day 1"), (6, "Week 3 Day 2"),
+    ]
+    for sid, title in titles:
+        _make_session(db, session_id=sid, title=title, instructor_id=instructor.id)
+    return instructor
+
+
+def test_nonexistent_week_number_returns_no_match(db):
+    # Week 7 exists nowhere; Day 2 does. Before the fix the title's unmatched
+    # "week7" token earned ~0.2 fuzzy credit from the verb "grade", pushing
+    # this to a false "ambiguous". A wrong week must rule the match out.
+    instructor = _seed_week_day_grid(db)
+    with patch("app.services.session_matcher.llm_provider.call_llm") as mock_llm:
+        mock_llm.return_value = '{"status": "no_match"}'
+        result = match_instruction_to_session("grade week 7 day 2", instructor.id, db)
+    assert result["status"] == "no_match"
+
+
+def test_nonexistent_day_number_returns_no_match(db):
+    # Week 2 exists, Day 7 does not. This already behaved correctly; pinned so
+    # a future change to the number rule can't silently regress it.
+    instructor = _seed_week_day_grid(db)
+    with patch("app.services.session_matcher.llm_provider.call_llm") as mock_llm:
+        mock_llm.return_value = '{"status": "no_match"}'
+        result = match_instruction_to_session("grade week 2 day 7", instructor.id, db)
+    assert result["status"] == "no_match"
+
+
+def test_filler_verb_does_not_change_outcome(db):
+    # The core symptom: prefixing a filler verb must not change the result for
+    # the same week/day numbers. Both a real match and a non-match are pinned
+    # to be identical with and without "grade".
+    instructor = _seed_week_day_grid(db)
+
+    # Real session — matched either way.
+    with_verb = match_instruction_to_session("grade week 3 day 1", instructor.id, db)
+    without_verb = match_instruction_to_session("week 3 day 1", instructor.id, db)
+    assert with_verb["status"] == without_verb["status"] == "matched"
+    assert with_verb["session_id"] == without_verb["session_id"]
+
+    # Nonexistent week — no_match either way (was: ambiguous only with the verb).
+    with patch("app.services.session_matcher.llm_provider.call_llm") as mock_llm:
+        mock_llm.return_value = '{"status": "no_match"}'
+        with_verb_bad = match_instruction_to_session("grade week 7 day 2", instructor.id, db)
+        without_verb_bad = match_instruction_to_session("week 7 day 2", instructor.id, db)
+    assert with_verb_bad["status"] == without_verb_bad["status"] == "no_match"
+
+
+def test_correct_instruction_still_matches_with_filler(db):
+    # Guard against over-correction: a genuine, wordy instruction still matches.
+    instructor = _seed_week_day_grid(db)
+    result = match_instruction_to_session(
+        "please grade the week 3 day 1 assignments", instructor.id, db
+    )
+    assert result["status"] == "matched"
+    assert result["session_title"] == "Week 3 Day 1"
