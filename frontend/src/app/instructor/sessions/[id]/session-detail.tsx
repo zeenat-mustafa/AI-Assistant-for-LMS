@@ -45,6 +45,7 @@ import { RequireAuth } from "@/components/require-auth";
 import { SignedInShell } from "@/components/signed-in-shell";
 import {
   EmptyState,
+  FileRoleBadge,
   FormError,
   FormNotice,
   Loading,
@@ -367,26 +368,6 @@ function UploadPanel({
 
 // ── File list ────────────────────────────────────────────────────────────────
 
-/**
- * A small label saying whether a file is graded or not. The single most
- * important thing this page has to communicate about a file, so it sits as a
- * badge next to the name rather than buried in the metadata line.
- */
-function RoleBadge({ role }: { role: "notebook" | "resource" }) {
-  const isNotebook = role === "notebook";
-  return (
-    <span
-      className={
-        isNotebook
-          ? "shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200 ring-inset"
-          : "shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200 ring-inset"
-      }
-    >
-      {isNotebook ? "Gradeable notebook" : "Resource · not graded"}
-    </span>
-  );
-}
-
 function FileListPanel({
   sessionId,
   files,
@@ -494,7 +475,7 @@ function FileListPanel({
                         <span className="truncate text-sm font-medium text-slate-900">
                           {file.original_filename}
                         </span>
-                        <RoleBadge role="notebook" />
+                        <FileRoleBadge role="notebook" />
                       </span>
                       <span className="block text-xs text-slate-500">
                         Uploaded {formatDate(file.uploaded_at)}
@@ -568,7 +549,7 @@ function FileListPanel({
                         <span className="truncate text-sm font-medium text-slate-900">
                           {file.original_filename}
                         </span>
-                        <RoleBadge role="resource" />
+                        <FileRoleBadge role="resource" />
                       </span>
                       <span className="block text-xs text-slate-500">
                         Uploaded {formatDate(file.uploaded_at)}

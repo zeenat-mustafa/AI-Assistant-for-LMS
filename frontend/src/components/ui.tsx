@@ -147,3 +147,27 @@ export function SubmitButton({
     </button>
   );
 }
+
+/**
+ * Says whether an assignment file is graded or not.
+ *
+ * Shared rather than duplicated per page: the instructor and the student must
+ * see the SAME distinction, and two copies of these class strings would drift.
+ * Notebooks and resources come from two structurally separate backend tables,
+ * so `role` is passed by the caller from which list the row came out of --
+ * never read off the row itself, which carries no role field.
+ */
+export function FileRoleBadge({ role }: { role: "notebook" | "resource" }) {
+  const isNotebook = role === "notebook";
+  return (
+    <span
+      className={
+        isNotebook
+          ? "shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200 ring-inset"
+          : "shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200 ring-inset"
+      }
+    >
+      {isNotebook ? "Gradeable notebook" : "Resource · not graded"}
+    </span>
+  );
+}
