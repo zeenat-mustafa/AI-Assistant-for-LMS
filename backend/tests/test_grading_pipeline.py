@@ -37,6 +37,8 @@ Cases covered
 import json
 from unittest.mock import patch
 
+from app.services.llm_provider import LLMProviderError
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -264,6 +266,75 @@ class TestGradeSingleSubmissionFile:
         assert "filename" in result
         assert result["student_id"] == 3
         assert result["filename"] == "bob_hw1.ipynb"
+
+    # -- bugfix-post-phase5, Fix 3: raw multi-provider error must be sanitised --
+
+    _RAW_ALL_PROVIDERS_FAILED = (
+        "Failed to generate rubric: LLM call failed: Gemini, Groq, and Ollama "
+        "all failed for purpose=fast: gemini_error=429 You exceeded your current "
+        "quota, quota_metric=\"generativelanguage.googleapis.com/generate_content_"
+        "free_tier_requests\", org_id=1234567890, "
+        "links {url: \"https://ai.google.dev/gemini-api/docs/rate-limits\"}, "
+        "groq_error=rate_limit_exceeded https://console.groq.com/settings/billing, "
+        "ollama_error=Ollama call failed: [WinError 10061]"
+    )
+
+    def _assert_clean(self, error_text):
+        # A genuinely new, generic message...
+        assert "temporarily unavailable" in error_text.lower()
+        # ...and none of the raw provider internals leak through.
+        for forbidden in (
+            "https://", "quota_metric", "org_id",
+            "console.groq.com", "ai.google.dev", "WinError",
+        ):
+            assert forbidden not in error_text, f"leaked: {forbidden!r}"
+
+    def test_all_providers_failed_string_is_sanitised(self, seeded_db):
+        """When the failure arrives as an error STRING from the pipeline (the
+        rubric-wrapped path), the returned error is the clean message."""
+        with patch(
+            "app.services.feedback.generate_feedback_and_persist",
+            return_value={"success": False, "error": self._RAW_ALL_PROVIDERS_FAILED},
+        ):
+            result = grade_single_submission_file(seeded_db, submission_file_id=300)
+        assert result["success"] is False
+        self._assert_clean(result["error"])
+
+    def test_all_providers_failed_exception_is_sanitised(self, seeded_db):
+        """When it arrives as a raised LLMProviderError, same clean message."""
+        with patch(
+            "app.services.feedback.generate_feedback_and_persist",
+            side_effect=LLMProviderError(self._RAW_ALL_PROVIDERS_FAILED),
+        ):
+            result = grade_single_submission_file(seeded_db, submission_file_id=300)
+        assert result["success"] is False
+        self._assert_clean(result["error"])
+
+    def test_batch_sanitises_all_providers_failed(self, seeded_db):
+        """The batch path (grade_session_batch) must sanitise too — its failed
+        events and summary failures carry no raw provider text."""
+        with patch(
+            "app.services.feedback.generate_feedback_and_persist",
+            side_effect=LLMProviderError(self._RAW_ALL_PROVIDERS_FAILED),
+        ):
+            events = list(grade_session_batch(seeded_db, session_id=10))
+        failed = [e for e in events if e.get("event") == "failed"]
+        assert failed, "expected at least one failed event"
+        for e in failed:
+            self._assert_clean(e["error"])
+        summary = events[-1]
+        assert summary["event"] == "summary"
+        for f in summary["failures"]:
+            self._assert_clean(f["error"])
+
+    def test_ordinary_error_not_altered(self, seeded_db):
+        """A short, safe error (not a provider failure) is passed through as-is."""
+        with patch(
+            "app.services.feedback.generate_feedback_and_persist",
+            return_value={"success": False, "error": "corrupted notebook"},
+        ):
+            result = grade_single_submission_file(seeded_db, submission_file_id=300)
+        assert result["error"] == "corrupted notebook"
 
 
 # ===========================================================================

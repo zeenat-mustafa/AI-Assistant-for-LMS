@@ -27,7 +27,48 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.services.llm_provider import LLMProviderError
+
 logger = logging.getLogger(__name__)
+
+
+# ── 0. User-facing error sanitisation ─────────────────────────────────────────
+# Stable substring of the message LLMProviderError raises when every provider
+# fails (see llm_provider.call_llm). It survives being re-wrapped by rubric.py
+# / evaluator.py ("LLM call failed: {exc}", "Failed to generate rubric: ..."),
+# so it reliably identifies an all-providers-failed condition however deep it
+# was caught.
+_ALL_PROVIDERS_FAILED_SIGNATURE = "Gemini, Groq, and Ollama all failed"
+
+# Genuinely new, safe message — deliberately not a truncation of the raw text.
+_GRADING_UNAVAILABLE_MESSAGE = (
+    "Grading is temporarily unavailable — the AI grading service could not be "
+    "reached (all providers failed). Please try again in a few minutes."
+)
+
+
+def _user_facing_error(raw: object) -> str:
+    """
+    Convert an internal grading error into text safe to return in an API
+    response.
+
+    When every LLM provider fails, the underlying error is a concatenation of
+    provider URLs, quota-metric names, org ids and retry-delay JSON from all
+    three providers — never fit to surface to a user, and previously rendered
+    verbatim in the chat panel. That single case is replaced wholesale with a
+    clean generic message; the full raw text is preserved in the logs by the
+    callers, which already log it before calling this.
+
+    Every other failure (a notebook that won't parse, a missing rubric row,
+    an unmatched file) is short, safe, and useful, so it passes through
+    unchanged — this is not a blanket error-swallow.
+    """
+    if isinstance(raw, LLMProviderError):
+        return _GRADING_UNAVAILABLE_MESSAGE
+    text = str(raw)
+    if _ALL_PROVIDERS_FAILED_SIGNATURE in text:
+        return _GRADING_UNAVAILABLE_MESSAGE
+    return text
 
 
 # ── 1. grade_single_submission_file ──────────────────────────────────────────
@@ -113,12 +154,14 @@ def grade_single_submission_file(db: Session, submission_file_id: int) -> dict[s
             return {**base, "success": True, "score": float(result["score"])}
         else:
             error_msg: str = result.get("error") or "Unknown evaluation failure."
+            # Log the RAW error (may contain full multi-provider internals);
+            # the returned value is sanitised for the API response below.
             logger.warning(
                 "grade_single_submission_file: SubmissionFile %d evaluation "
                 "returned failure for student %d: %s",
                 submission_file_id, student_id, error_msg,
             )
-            return {**base, "success": False, "error": error_msg}
+            return {**base, "success": False, "error": _user_facing_error(error_msg)}
 
     except Exception as exc:  # noqa: BLE001
         logger.error(
@@ -127,7 +170,7 @@ def grade_single_submission_file(db: Session, submission_file_id: int) -> dict[s
             submission_file_id, student_id, exc,
             exc_info=True,
         )
-        return {**base, "success": False, "error": str(exc)}
+        return {**base, "success": False, "error": _user_facing_error(exc)}
 
 
 # ── 2. grade_session_batch ────────────────────────────────────────────────────
@@ -243,7 +286,7 @@ def grade_session_batch(
             )
             result = {
                 "success": False,
-                "error": f"Unexpected batch error: {exc}",
+                "error": _user_facing_error(f"Unexpected batch error: {exc}"),
                 "student_id": student_id,
                 "filename": filename,
             }
