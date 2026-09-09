@@ -1,12 +1,15 @@
 """
 Assignment file upload (instructor) and download (any authenticated user).
 
-POST   /sessions/{session_id}/assignments                    → upload one or more .ipynb files,
-                                                               or a .zip archive (recursively extracted).
-                                                               Returns a list of all created records.
-GET    /sessions/{session_id}/assignments                    → list assignment files
-GET    /sessions/{session_id}/assignments/{file_id}/download → download a file
-DELETE /sessions/{session_id}/assignments/{file_id}          → remove a file
+POST   /sessions/{session_id}/assignments                              → upload one or more .ipynb files,
+                                                                         or a .zip archive (recursively extracted).
+                                                                         Returns a list of all created records.
+GET    /sessions/{session_id}/assignments                              → list assignment files
+GET    /sessions/{session_id}/assignments/{file_id}/download           → download a file
+DELETE /sessions/{session_id}/assignments/{file_id}                    → remove a notebook
+GET    /sessions/{session_id}/assignments/resources                    → list resource files
+GET    /sessions/{session_id}/assignments/resources/{id}/download      → download a resource file
+DELETE /sessions/{session_id}/assignments/resources/{id}               → remove a resource file
 """
 
 import logging
@@ -385,6 +388,25 @@ def delete_assignment(
     if abs_path.exists():
         abs_path.unlink()
     db.delete(f)
+    db.commit()
+
+
+@router.delete(
+    "/resources/{resource_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a resource file (instructor only)",
+)
+def delete_resource(
+    session_id: int,
+    resource_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _instructor: Annotated[User, Depends(require_instructor)],
+) -> None:
+    r = _get_resource_or_404(resource_id, session_id, db)
+    abs_path = absolute_path(r.file_path)
+    if abs_path.exists():
+        abs_path.unlink()
+    db.delete(r)
     db.commit()
 
 

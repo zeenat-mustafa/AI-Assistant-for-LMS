@@ -26,6 +26,7 @@ export {
   resourceDownloadUrl,
   downloadResource,
   deleteAssignment,
+  deleteResource,
   generateRubric,
 } from "./assignments";
 export {

@@ -9,9 +9,11 @@
  * RESOURCES (`resource_files`) -- datasets, slides, PDFs bundled in a zip.
  * The backend keeps them in structurally separate tables and returns them as
  * two separate fields, so this page keeps two separate lists rather than one
- * list with a role flag. Only notebooks are gradeable, only notebooks count
- * toward the session's assignment total, and only notebooks can be removed
- * (the API exposes no delete route for resources).
+ * list with a role flag. Only notebooks are gradeable and only notebooks
+ * count toward the session's assignment total, but both kinds can be
+ * removed -- notebook and resource ids collide (both tables start at 1), so
+ * every id-keyed piece of state below (busy state, delete confirmation) is
+ * keyed by role+id, never by the bare id.
  *
  * Upload goes through 5.1's `uploadAssignment`, which builds a `FormData`
  * and posts it with the bearer token -- deliberately not a `<form action>`
@@ -25,11 +27,13 @@ import Link from "next/link";
 import {
   ApiError,
   deleteAssignment,
+  deleteResource,
   downloadAssignment,
   downloadResource,
   getGradeReport,
   getSession,
   listAssignments,
+  listResources,
   uploadAssignment,
 } from "@/lib/api";
 import type {
@@ -163,6 +167,10 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
     setFiles(await listAssignments(sessionId));
   }, [sessionId]);
 
+  const refreshResources = useCallback(async () => {
+    setResources(await listResources(sessionId));
+  }, [sessionId]);
+
   if (loadError) {
     return (
       <>
@@ -205,6 +213,7 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
         files={files}
         resources={resources}
         onDeleted={refreshFiles}
+        onResourceDeleted={refreshResources}
       />
 
       <GradingChat
@@ -373,6 +382,7 @@ function FileListPanel({
   files,
   resources,
   onDeleted,
+  onResourceDeleted,
 }: {
   sessionId: number;
   /** null while loading. */
@@ -380,13 +390,14 @@ function FileListPanel({
   /** null while loading. */
   resources: ResourceFileRead[] | null;
   onDeleted: () => Promise<void>;
+  onResourceDeleted: () => Promise<void>;
 }) {
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [confirmingId, setConfirmingId] = useState<number | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Ids collide across the two tables (both start at 1), so busy state is
-  // keyed by role+id, never by the bare id.
+  // Ids collide across the two tables (both start at 1), so busy state and
+  // delete confirmation are both keyed by role+id, never by the bare id.
   const busyKey = (role: "notebook" | "resource", id: number) => role + ":" + id;
 
   async function handleDownload(
@@ -420,6 +431,24 @@ function FileListPanel({
     try {
       await deleteAssignment(sessionId, file.id);
       await onDeleted();
+      setConfirmingId(null);
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof ApiError
+          ? deleteError.detail
+          : `Could not remove ${file.original_filename}.`,
+      );
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDeleteResource(file: ResourceFileRead) {
+    setError(null);
+    setBusyId(busyKey("resource", file.id));
+    try {
+      await deleteResource(sessionId, file.id);
+      await onResourceDeleted();
       setConfirmingId(null);
     } catch (deleteError) {
       setError(
@@ -491,7 +520,7 @@ function FileListPanel({
                         Download
                       </SmallButton>
 
-                      {confirmingId === file.id ? (
+                      {confirmingId === busyKey("notebook", file.id) ? (
                         <>
                           <SmallButton
                             tone="danger"
@@ -507,7 +536,7 @@ function FileListPanel({
                       ) : (
                         <SmallButton
                           tone="danger"
-                          onClick={() => setConfirmingId(file.id)}
+                          onClick={() => setConfirmingId(busyKey("notebook", file.id))}
                           disabled={busyId === busyKey("notebook", file.id)}
                         >
                           Remove
@@ -520,11 +549,7 @@ function FileListPanel({
             )}
           </section>
 
-          {/*
-            Resource files. No Remove control on purpose: the backend exposes
-            no delete route for resources, and 5.3's rule is not to build UI
-            for an endpoint that does not exist.
-          */}
+          {/* Resource files -- same download + remove pattern as notebooks. */}
           {resources.length > 0 ? (
             <section aria-labelledby="resources-heading">
               <h3
@@ -563,6 +588,29 @@ function FileListPanel({
                       >
                         Download
                       </SmallButton>
+
+                      {confirmingId === busyKey("resource", file.id) ? (
+                        <>
+                          <SmallButton
+                            tone="danger"
+                            onClick={() => handleDeleteResource(file)}
+                            disabled={busyId === busyKey("resource", file.id)}
+                          >
+                            Confirm remove
+                          </SmallButton>
+                          <SmallButton onClick={() => setConfirmingId(null)}>
+                            Cancel
+                          </SmallButton>
+                        </>
+                      ) : (
+                        <SmallButton
+                          tone="danger"
+                          onClick={() => setConfirmingId(busyKey("resource", file.id))}
+                          disabled={busyId === busyKey("resource", file.id)}
+                        >
+                          Remove
+                        </SmallButton>
+                      )}
                     </span>
                   </li>
                 ))}
