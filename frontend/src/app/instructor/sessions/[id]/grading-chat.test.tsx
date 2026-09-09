@@ -372,3 +372,141 @@ describe("<GradingChat /> — cross-session and failures", () => {
     );
   });
 });
+
+/**
+ * Fix C — the chat panel renders the backend's message and nothing else.
+ *
+ * The backend now returns a clean sentence when every LLM provider fails,
+ * instead of a dump of provider URLs, quota metrics and org ids. These tests
+ * pin both halves: a clean message must arrive on screen untouched, and
+ * anything that still looks like raw internals must be swapped for a generic
+ * line with the real text sent to the console rather than the user.
+ */
+describe("<GradingChat /> — no raw error text reaches the UI", () => {
+  /** The backend's real message when all providers fail (backend Fix 3). */
+  const CLEAN_UNAVAILABLE =
+    "Grading is temporarily unavailable — the AI grading service could not be " +
+    "reached (all providers failed). Please try again in a few minutes.";
+
+  /** Abridged sample of what used to render verbatim. */
+  const RAW_DUMP =
+    "LLM call failed: Gemini, Groq, and Ollama all failed. Gemini: 429 " +
+    "RESOURCE_EXHAUSTED { 'quota_metric': " +
+    "'generativelanguage.googleapis.com/generate_content_free_tier_requests', " +
+    "'org_id': '884271345921' } retry_delay { seconds: 51 }";
+
+  it("renders the backend's clean failure message as-is", async () => {
+    streamChatMock.mockReturnValue(
+      streamOf(
+        { event: "failed", student_id: 2, filename: "a.ipynb", error: CLEAN_UNAVAILABLE },
+        {
+          event: "summary",
+          total: 1,
+          graded: 0,
+          failed: 1,
+          failures: [{ student_id: 2, filename: "a.ipynb", error: CLEAN_UNAVAILABLE }],
+          message: `Graded 0 of 1 submission in ${TITLE}. 1 failed — see the details below.`,
+        },
+      ),
+    );
+    render(<GradingChat sessionTitle={TITLE} onGraded={vi.fn()} />);
+    await send();
+
+    // Present verbatim -- not reworded, not truncated.
+    await waitFor(() =>
+      expect(screen.getAllByText(new RegExp(escapeRe(CLEAN_UNAVAILABLE))).length)
+        .toBeGreaterThan(0),
+    );
+    expect(
+      screen.getByText(/Graded 0 of 1 submission in Week 3 Day 1/),
+    ).toBeInTheDocument();
+  });
+
+  it("renders an unrecognized_instruction reply as-is", async () => {
+    const message =
+      'I can only help with grading instructions, like "grade Week 3 Day 1" or ' +
+      '"grade Week 3 Day 1 for a specific student". I can\'t answer other kinds ' +
+      "of questions.";
+    streamChatMock.mockReturnValue(
+      streamOf({ status: "unrecognized_instruction", message }),
+    );
+    render(<GradingChat sessionTitle={TITLE} onGraded={vi.fn()} />);
+    await send();
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    // A conversational reply, not an error banner.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("suppresses a raw provider dump in a failed event and logs it instead", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    streamChatMock.mockReturnValue(
+      streamOf({
+        event: "failed",
+        student_id: 2,
+        filename: "a.ipynb",
+        error: RAW_DUMP,
+      }),
+    );
+    render(<GradingChat sessionTitle={TITLE} onGraded={vi.fn()} />);
+    await send();
+
+    await waitFor(() =>
+      expect(screen.getByText(/details in the console/i)).toBeInTheDocument(),
+    );
+    expect(document.body.textContent).not.toContain("quota_metric");
+    expect(document.body.textContent).not.toContain("org_id");
+    // Suppressed from the UI, not lost.
+    expect(spy.mock.calls.flat().join(" ")).toContain("quota_metric");
+
+    spy.mockRestore();
+  });
+
+  it("suppresses a raw dump in the summary message and in its failure list", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    streamChatMock.mockReturnValue(
+      streamOf({
+        event: "summary",
+        total: 1,
+        graded: 0,
+        failed: 1,
+        failures: [{ student_id: 2, filename: "a.ipynb", error: RAW_DUMP }],
+        message: RAW_DUMP,
+      }),
+    );
+    render(<GradingChat sessionTitle={TITLE} onGraded={vi.fn()} />);
+    await send();
+
+    await waitFor(() =>
+      expect(screen.getByText(/Something went wrong on the grading service/i))
+        .toBeInTheDocument(),
+    );
+    expect(document.body.textContent).not.toContain("quota_metric");
+    expect(spy).toHaveBeenCalled();
+
+    spy.mockRestore();
+  });
+
+  it("suppresses an unreasonably long outcome message", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const runaway = "no marker here but far too long. ".repeat(40);
+    streamChatMock.mockReturnValue(
+      streamOf({ status: "no_session_match", message: runaway }),
+    );
+    render(<GradingChat sessionTitle={TITLE} onGraded={vi.fn()} />);
+    await send();
+
+    await waitFor(() =>
+      expect(screen.getByText(/Something went wrong on the grading service/i))
+        .toBeInTheDocument(),
+    );
+    expect(screen.queryByText(runaway)).not.toBeInTheDocument();
+
+    spy.mockRestore();
+  });
+});
+
+/** Escape a literal string for use inside a RegExp. */
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

@@ -26,6 +26,17 @@
  * component therefore matches on `in {title}`. If that wording ever changes
  * the check fails toward showing the warning and skipping the refresh, which
  * is the safe direction — never toward silently claiming a refresh happened.
+ *
+ * Message rendering — as-is, with one backstop
+ * --------------------------------------------
+ * Every message from the backend is rendered verbatim. Nothing here reformats,
+ * truncates or parses it; the only string inspection in this file is
+ * `summaryNamesSession` above, which routes and never edits what is shown.
+ *
+ * The single exception is `safeChatText`, which passes a normal message
+ * through untouched and swaps in a generic line only when the text looks like
+ * raw internals (see lib/chat-safety.ts). The backend already sanitises the
+ * known all-providers-failed case; this catches anything that slips past it.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -33,6 +44,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, isChatEarlyExit, streamChat } from "@/lib/api";
 import type { ChatEarlyExit, GradingEvent, GradingSummaryEvent } from "@/lib/api";
 import { Panel, SmallButton, SubmitButton } from "@/components/ui";
+import {
+  GENERIC_FAILURE_FALLBACK,
+  safeChatText,
+} from "@/lib/chat-safety";
 
 interface Turn {
   id: number;
@@ -248,7 +263,9 @@ function TurnView({ turn }: { turn: Turn }) {
 
         {turn.summary ? (
           <div className="mt-2 border-t border-slate-200 pt-2">
-            <p className="text-sm text-slate-800">{turn.summary.message}</p>
+            <p className="text-sm text-slate-800">
+              {safeChatText(turn.summary.message, "summary message")}
+            </p>
             <p className="mt-1 text-xs text-slate-500">
               {turn.summary.graded} graded · {turn.summary.failed} failed ·{" "}
               {turn.summary.total} total
@@ -257,7 +274,12 @@ function TurnView({ turn }: { turn: Turn }) {
               <ul className="mt-1 list-inside list-disc text-xs text-red-700">
                 {turn.summary.failures.map((failure, index) => (
                   <li key={index}>
-                    {failure.filename}: {failure.error}
+                    {failure.filename}:{" "}
+                    {safeChatText(
+                      failure.error,
+                      `summary failure for ${failure.filename}`,
+                      GENERIC_FAILURE_FALLBACK,
+                    )}
                   </li>
                 ))}
               </ul>
@@ -294,7 +316,12 @@ function EventLine({ event }: { event: GradingEvent }) {
   if (event.event === "failed") {
     return (
       <span className="text-red-700">
-        <span aria-hidden>✕</span> Failed <strong>{event.filename}</strong> — {event.error}
+        <span aria-hidden>✕</span> Failed <strong>{event.filename}</strong> —{" "}
+        {safeChatText(
+          event.error,
+          `failed event for ${event.filename}`,
+          GENERIC_FAILURE_FALLBACK,
+        )}
       </span>
     );
   }
@@ -308,7 +335,9 @@ function EventLine({ event }: { event: GradingEvent }) {
 function OutcomeView({ outcome }: { outcome: ChatEarlyExit }) {
   return (
     <>
-      <p className="text-sm text-slate-800">{outcome.message}</p>
+      <p className="text-sm text-slate-800">
+        {safeChatText(outcome.message, `${outcome.status} message`)}
+      </p>
 
       {outcome.status === "ambiguous_session" ? (
         <ul className="mt-1 list-inside list-disc text-xs text-slate-600">

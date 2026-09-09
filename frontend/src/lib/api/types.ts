@@ -300,6 +300,16 @@ export interface ChatUnsupportedFilter {
   reason: string;
 }
 
+/**
+ * The instruction was not a grading instruction at all ("what is a tensor?").
+ * Previously such a question fell through to a student-name lookup and came
+ * back as "no such student"; the backend now answers honestly instead.
+ */
+export interface ChatUnrecognizedInstruction {
+  status: "unrecognized_instruction";
+  message: string;
+}
+
 export interface ChatGraded {
   status: "graded";
   message: string;
@@ -319,6 +329,7 @@ export type ChatResponse =
   | ChatStudentNotFound
   | ChatAmbiguousStudent
   | ChatUnsupportedFilter
+  | ChatUnrecognizedInstruction
   | ChatGraded;
 
 /** The non-graded ("early exit") outcomes, which /chat/stream emits as one event. */
