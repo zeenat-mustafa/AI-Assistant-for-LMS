@@ -24,10 +24,12 @@ vi.mock("next/navigation", () => ({
 
 const getSessionMock = vi.fn();
 const listAssignmentsMock = vi.fn();
+const listResourcesMock = vi.fn();
 const uploadAssignmentMock = vi.fn();
 const downloadAssignmentMock = vi.fn();
 const downloadResourceMock = vi.fn();
 const deleteAssignmentMock = vi.fn();
+const deleteResourceMock = vi.fn();
 // 5.4 added the roster to this page; it must resolve, or its own error
 // banner becomes a second role="alert" and every assertion here is ambiguous.
 const getGradeReportMock = vi.fn();
@@ -38,10 +40,12 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     getSession: (...a: unknown[]) => getSessionMock(...a),
     listAssignments: (...a: unknown[]) => listAssignmentsMock(...a),
+    listResources: (...a: unknown[]) => listResourcesMock(...a),
     uploadAssignment: (...a: unknown[]) => uploadAssignmentMock(...a),
     downloadAssignment: (...a: unknown[]) => downloadAssignmentMock(...a),
     downloadResource: (...a: unknown[]) => downloadResourceMock(...a),
     deleteAssignment: (...a: unknown[]) => deleteAssignmentMock(...a),
+    deleteResource: (...a: unknown[]) => deleteResourceMock(...a),
     getGradeReport: (...a: unknown[]) => getGradeReportMock(...a),
   };
 });
@@ -355,7 +359,8 @@ describe("<SessionDetail /> — download and remove", () => {
  * backend stores those in a structurally separate `resource_files` table and
  * returns them as their own field, never mixed into `unsolved_files`. These
  * tests pin the two-list rendering, the derived-`file_role` split on upload,
- * and the absence of a Remove control for resources.
+ * and (bugfix-resource-file-delete) that resources can be removed the same
+ * way notebooks can, even when ids collide across the two tables.
  */
 describe("<SessionDetail /> — resource files", () => {
   it("uploads a zip containing only resources and reports them as resources", async () => {
@@ -416,15 +421,59 @@ describe("<SessionDetail /> — resource files", () => {
     expect(screen.getByText(/Resource · not graded/)).toBeInTheDocument();
   });
 
-  it("offers no Remove control for a resource — the API has no delete route", async () => {
+  it("asks for confirmation before removing a resource, and refreshes the list after", async () => {
+    getSessionMock.mockResolvedValue(sessionWith([], [resource({ id: 71 })]));
+    deleteResourceMock.mockResolvedValue(undefined);
+    listResourcesMock.mockResolvedValue([]);
+
+    await renderDetail();
+    await waitFor(() => expect(screen.getByText("titanic.csv")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+    expect(deleteResourceMock).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: /confirm remove/i }));
+
+    await waitFor(() => expect(deleteResourceMock).toHaveBeenCalledWith(5, 71));
+    expect(deleteAssignmentMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText("titanic.csv")).not.toBeInTheDocument());
+  });
+
+  it("can back out of removing a resource", async () => {
     getSessionMock.mockResolvedValue(sessionWith([], [resource({ id: 71 })]));
     await renderDetail();
-
     await waitFor(() => expect(screen.getByText("titanic.csv")).toBeInTheDocument());
-    // The notebook list is empty here, so any Remove button at all would be
-    // the resource's.
-    expect(screen.queryByRole("button", { name: /remove/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(deleteResourceMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /^remove$/i })).toBeInTheDocument();
+  });
+
+  it("removes the correct row when a notebook and a resource share the same id", async () => {
+    // Both tables start their ids at 1, so id 14 can name a notebook AND a
+    // resource in the same session -- confirming one must not remove the other.
+    getSessionMock.mockResolvedValue(
+      sessionWith(
+        [file({ id: 14, original_filename: "a.ipynb" })],
+        [resource({ id: 14, original_filename: "data.csv" })],
+      ),
+    );
+    deleteResourceMock.mockResolvedValue(undefined);
+    listResourcesMock.mockResolvedValue([]);
+
+    await renderDetail();
+    await waitFor(() => expect(screen.getByText("a.ipynb")).toBeInTheDocument());
+
+    const resources = screen.getByRole("region", { name: /resource files \(1\)/i });
+    await userEvent.click(within(resources).getByRole("button", { name: /^remove$/i }));
+    await userEvent.click(within(resources).getByRole("button", { name: /confirm remove/i }));
+
+    await waitFor(() => expect(deleteResourceMock).toHaveBeenCalledWith(5, 14));
+    expect(deleteAssignmentMock).not.toHaveBeenCalled();
+    // The notebook row is untouched.
+    expect(screen.getByText("a.ipynb")).toBeInTheDocument();
   });
 
   it("downloads a resource through its own authenticated endpoint", async () => {

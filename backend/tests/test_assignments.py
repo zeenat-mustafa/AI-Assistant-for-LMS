@@ -671,3 +671,149 @@ class TestResourceFileHandling:
         assert {d["original_filename"] for d in data} == {"a.ipynb", "b.ipynb"}
         assert all(d["file_role"] == "notebook" for d in data)
         assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).all() == []
+
+
+# ===========================================================================
+# bugfix-resource-file-delete: DELETE /sessions/{id}/assignments/resources/{id}
+# ===========================================================================
+
+class TestDeleteResource:
+    """
+    Mirrors the notebook delete route (DELETE /sessions/{id}/assignments/{id})
+    exactly: instructor-only, 204 on success, 404 if the resource doesn't
+    exist or belongs to a different session, DB row + on-disk file both
+    removed.
+    """
+
+    def test_delete_removes_db_row_and_disk_file(self, client, db):
+        c, instr_token, _ = client
+        zip_bytes = _make_zip({"dataset.csv": b"a,b\n1,2"})
+        # Real save (not mocked) so there is an actual file on disk to delete.
+        upload = c.post(
+            "/api/v1/sessions/10/assignments",
+            files=[("files", ("r.zip", zip_bytes, "application/zip"))],
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert upload.status_code == 201
+        rid = upload.json()[0]["id"]
+
+        row = db.query(ResourceFile).filter(ResourceFile.id == rid).one()
+        from app.services.storage import absolute_path
+        abs_path = absolute_path(row.file_path)
+        assert abs_path.exists()
+
+        res = c.delete(
+            f"/api/v1/sessions/10/assignments/resources/{rid}",
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert res.status_code == 204
+        assert res.content == b""
+
+        assert db.query(ResourceFile).filter(ResourceFile.id == rid).first() is None
+        assert not abs_path.exists()
+
+    def test_delete_nonexistent_resource_404(self, client, db):
+        c, instr_token, _ = client
+        res = c.delete(
+            "/api/v1/sessions/10/assignments/resources/9999",
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert res.status_code == 404
+
+    def test_delete_resource_from_wrong_session_404(self, client, db):
+        """A resource that exists but belongs to a different session must
+        404, same as the notebook route's equivalent case."""
+        c, instr_token, _ = client
+        other_session = LMSSession(id=11, title="Week 2 Day 1")
+        db.add(other_session)
+        db.commit()
+
+        zip_bytes = _make_zip({"dataset.csv": b"a,b\n1,2"})
+        upload = c.post(
+            "/api/v1/sessions/10/assignments",
+            files=[("files", ("r.zip", zip_bytes, "application/zip"))],
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        rid = upload.json()[0]["id"]
+
+        res = c.delete(
+            f"/api/v1/sessions/11/assignments/resources/{rid}",
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert res.status_code == 404
+        # Untouched — still exists under its real session.
+        assert db.query(ResourceFile).filter(ResourceFile.id == rid).first() is not None
+
+    def test_student_cannot_delete_resource(self, client, db):
+        c, instr_token, student_token = client
+        zip_bytes = _make_zip({"dataset.csv": b"a,b\n1,2"})
+        upload = c.post(
+            "/api/v1/sessions/10/assignments",
+            files=[("files", ("r.zip", zip_bytes, "application/zip"))],
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        rid = upload.json()[0]["id"]
+
+        res = c.delete(
+            f"/api/v1/sessions/10/assignments/resources/{rid}",
+            headers={"Authorization": f"Bearer {student_token}"},
+        )
+        assert res.status_code == 403
+        assert db.query(ResourceFile).filter(ResourceFile.id == rid).first() is not None
+
+    def test_unauthenticated_cannot_delete_resource(self, client, db):
+        c, instr_token, _ = client
+        zip_bytes = _make_zip({"dataset.csv": b"a,b\n1,2"})
+        upload = c.post(
+            "/api/v1/sessions/10/assignments",
+            files=[("files", ("r.zip", zip_bytes, "application/zip"))],
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        rid = upload.json()[0]["id"]
+
+        res = c.delete(f"/api/v1/sessions/10/assignments/resources/{rid}")
+        assert res.status_code == 401
+        assert db.query(ResourceFile).filter(ResourceFile.id == rid).first() is not None
+
+    def test_deleting_a_resource_does_not_touch_a_same_id_notebook(self, client, db):
+        """Regression: notebook and resource ids can collide (both tables
+        start at 1) — deleting one must never remove or affect the other."""
+        c, instr_token, _ = client
+        nb = _make_notebook_bytes(markdown_cells=["# HW"])
+        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
+            nb_res = _post(c, instr_token, 10, ("hw.ipynb", nb))
+        nb_id = nb_res.json()[0]["id"]
+
+        zip_bytes = _make_zip({"dataset.csv": b"a,b\n1,2"})
+        upload = c.post(
+            "/api/v1/sessions/10/assignments",
+            files=[("files", ("r.zip", zip_bytes, "application/zip"))],
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        rid = upload.json()[0]["id"]
+        assert rid == nb_id, "test assumes colliding ids across the two tables"
+
+        res = c.delete(
+            f"/api/v1/sessions/10/assignments/resources/{rid}",
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert res.status_code == 204
+
+        # The notebook with the same numeric id is untouched.
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.id == nb_id).first() is not None
+
+    def test_notebook_delete_route_still_unaffected(self, client, db):
+        """Regression: the existing notebook delete route is untouched by
+        this change."""
+        c, instr_token, _ = client
+        nb = _make_notebook_bytes(markdown_cells=["# HW"])
+        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
+            nb_res = _post(c, instr_token, 10, ("hw.ipynb", nb))
+        nb_id = nb_res.json()[0]["id"]
+
+        res = c.delete(
+            f"/api/v1/sessions/10/assignments/{nb_id}",
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert res.status_code == 204
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.id == nb_id).first() is None

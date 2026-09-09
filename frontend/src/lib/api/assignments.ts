@@ -137,9 +137,7 @@ export function downloadResource(
 /**
  * DELETE /sessions/{id}/assignments/{fileId} -- instructor only. 204.
  *
- * NOTEBOOKS ONLY. The backend exposes no delete endpoint for resource
- * files, so there is deliberately no `deleteResource` counterpart here and
- * no Remove control for resources in the UI.
+ * NOTEBOOKS ONLY. Use `deleteResource` below for the resources counterpart.
  */
 export function deleteAssignment(
   sessionId: number,
@@ -147,6 +145,22 @@ export function deleteAssignment(
   options: RequestOptions = {},
 ): Promise<void> {
   return apiFetch<void>(`/sessions/${sessionId}/assignments/${fileId}`, {
+    ...options,
+    method: "DELETE",
+  });
+}
+
+/**
+ * DELETE /sessions/{id}/assignments/resources/{resourceId} -- instructor
+ * only. 204. Same pattern as `deleteAssignment`, against the separate
+ * resources route.
+ */
+export function deleteResource(
+  sessionId: number,
+  resourceId: number,
+  options: RequestOptions = {},
+): Promise<void> {
+  return apiFetch<void>(`/sessions/${sessionId}/assignments/resources/${resourceId}`, {
     ...options,
     method: "DELETE",
   });
