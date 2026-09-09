@@ -10,9 +10,9 @@ Provides two public callables:
     grade_session_batch(db, session_id) → Generator[dict, None, None]
         Generator that grades every ungraded SubmissionFile in a Session
         one at a time, yielding progress events as it goes:
-            {"event": "checking",  "student_id": int, "filename": str}
-            {"event": "graded",    "student_id": int, "filename": str, "score": float}
-            {"event": "failed",    "student_id": int, "filename": str, "error": str}
+            {"event": "checking",  "student_id": int, "student_name": str, "filename": str}
+            {"event": "graded",    "student_id": int, "student_name": str, "filename": str, "score": float}
+            {"event": "failed",    "student_id": int, "student_name": str, "filename": str, "error": str}
             {"event": "summary",   "total": int, "graded": int, "failed": int,
                                    "failures": [{"student_id", "filename", "error"}, ...]}
 
@@ -191,15 +191,15 @@ def grade_session_batch(
     ------------
     ``checking``  — emitted *before* grading starts for each file::
 
-        {"event": "checking", "student_id": int, "filename": str}
+        {"event": "checking", "student_id": int, "student_name": str, "filename": str}
 
     ``graded``    — emitted after a successful grade::
 
-        {"event": "graded", "student_id": int, "filename": str, "score": float}
+        {"event": "graded", "student_id": int, "student_name": str, "filename": str, "score": float}
 
     ``failed``    — emitted after a failure; batch continues::
 
-        {"event": "failed", "student_id": int, "filename": str, "error": str}
+        {"event": "failed", "student_id": int, "student_name": str, "filename": str, "error": str}
 
     ``summary``   — always the final event::
 
@@ -266,12 +266,16 @@ def grade_session_batch(
 
     for sub_file in ungraded_files:
         student_id: int = sub_file.submission.student_id
+        # Falls back to "a student" only if a User row somehow has an empty
+        # name — the DB column is NOT NULL, but nothing enforces non-empty.
+        student_name: str = sub_file.submission.student.name or "a student"
         filename: str = sub_file.original_filename
 
         # ── checking event ────────────────────────────────────────────────────
         yield {
             "event": "checking",
             "student_id": student_id,
+            "student_name": student_name,
             "filename": filename,
         }
 
@@ -296,6 +300,7 @@ def grade_session_batch(
             yield {
                 "event": "graded",
                 "student_id": student_id,
+                "student_name": student_name,
                 "filename": filename,
                 "score": result["score"],
             }
@@ -310,6 +315,7 @@ def grade_session_batch(
             yield {
                 "event": "failed",
                 "student_id": student_id,
+                "student_name": student_name,
                 "filename": filename,
                 "error": error_msg,
             }
