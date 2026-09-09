@@ -154,3 +154,13 @@ def test_unknown_status_degrades_instead_of_raising():
     msg = build_response_message("something_new_we_added_later")
     assert isinstance(msg, str)
     assert msg
+
+
+def test_unrecognized_instruction_message():
+    # bugfix-post-phase5, Fix 4: a distinct, honest message for an instruction
+    # that isn't a grading command at all — not the "couldn't find a student"
+    # text, and it must not pretend to answer the question.
+    msg = build_response_message("unrecognized_instruction")
+    assert "only help with grading" in msg.lower()
+    assert "student" not in msg.lower() or "specific student" in msg.lower()
+    assert "couldn't find" not in msg.lower()

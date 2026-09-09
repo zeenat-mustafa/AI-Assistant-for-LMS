@@ -277,3 +277,51 @@ def test_exclusionary_other_than_returns_unsupported(db):
     result = parse_grading_filter("grade everyone other than Ali", 1, db)
 
     assert result["scope"] == "unsupported"
+
+
+# ---------------------------------------------------------------------------
+# bugfix-post-phase5, Fix 4: a non-grading instruction that merely sat next
+# to a session name must not be reported as a missing student.
+# ---------------------------------------------------------------------------
+
+def _seed_session_with_one_student(db):
+    instructor = _make_instructor(db)
+    _make_session(db, session_id=1, title="Week 3 Day 1", instructor_id=instructor.id)
+    ali = _make_student(db, user_id=10, name="Ali Khan")
+    _make_submission(db, submission_id=100, session_id=1, student_id=ali.id)
+    return instructor
+
+
+def test_non_grading_question_returns_unrecognized(db):
+    # The reported bug: the session name resolves, then the trailing question
+    # words ("how many assignments are ungraded") were misread as a student
+    # name, giving "couldn't find a student matching 'how'". 2+ leftover words
+    # with no "for" is prose, not a name.
+    _seed_session_with_one_student(db)
+    result = parse_grading_filter(
+        "grade Week 3 Day 1 how many assignments are ungraded", 1, db
+    )
+    assert result == {"scope": "unrecognized"}
+
+
+def test_another_non_grading_question_returns_unrecognized(db):
+    _seed_session_with_one_student(db)
+    result = parse_grading_filter("grade Week 3 Day 1 what is the average score", 1, db)
+    assert result == {"scope": "unrecognized"}
+
+
+def test_single_wrong_student_name_still_not_found(db):
+    # The must-not-regress case: one leftover word is still a genuine (absent)
+    # student attempt, keeping the precise student_not_found message.
+    _seed_session_with_one_student(db)
+    result = parse_grading_filter("grade Week 3 Day 1 for Zaid", 1, db)
+    assert result == {"scope": "not_found", "attempted_name": "Zaid"}
+
+
+def test_two_word_absent_name_after_for_still_not_found(db):
+    # A real two-word student name introduced by "for" is a deliberate student
+    # reference even though it has two words — the "for" guard protects it, so
+    # it stays not_found rather than being mistaken for prose.
+    _seed_session_with_one_student(db)
+    result = parse_grading_filter("grade Week 3 Day 1 for Bob Smith", 1, db)
+    assert result == {"scope": "not_found", "attempted_name": "Bob"}

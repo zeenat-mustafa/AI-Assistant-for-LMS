@@ -117,6 +117,13 @@ def build_response_message(status: str, **context) -> str:
             "Try naming a single student instead, or grade everyone."
         )
 
+    if status == "unrecognized_instruction":
+        return (
+            "I can only help with grading instructions, like "
+            "\"grade Week 3 Day 1\" or \"grade Week 3 Day 1 for a specific "
+            "student\". I can't answer other kinds of questions."
+        )
+
     if status == "graded":
         return _graded_message(context)
 

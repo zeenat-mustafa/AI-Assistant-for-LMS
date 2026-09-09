@@ -33,6 +33,17 @@ Return shapes
         no "exclude this student" concept today. This must never fall
         through to a normal "student" match: matching Ali as the INCLUSION
         target would silently do the opposite of what the instructor asked.
+    {"scope": "unrecognized"}
+        The instruction doesn't resemble a grading command at all — after
+        removing the session's own words and grading vocabulary, what's left
+        is a run of ordinary words (2+), not introduced by "for", that match
+        no student (e.g. "how many assignments are ungraded"). This is a
+        non-grading question that happened to sit next to a session name;
+        returning "student_not_found" for it would wrongly imply the system
+        understood the question and just couldn't find the first word as a
+        student. A single leftover word, or any "for <name>" phrase, is still
+        treated as a genuine (mistyped/absent) student reference — see
+        not_found — so real grading commands are never misclassified.
 
 Public API
 ──────────
@@ -96,7 +107,7 @@ def _has_exclusion_before(tokens_lower: list[str], idx: int) -> bool:
 
 def _extract_name_like_tokens(
     instruction: str, exclude: set[str]
-) -> tuple[list[str], bool]:
+) -> tuple[list[str], bool, bool]:
     """
     Pull out words from *instruction* that could plausibly be a student's
     name: alphabetic, not a stopword, not part of this session's own title,
@@ -105,10 +116,15 @@ def _extract_name_like_tokens(
     Original casing is preserved (for a readable attempted_name), de-duped
     case-insensitively, order preserved.
 
-    Returns (name_like_tokens, exclusion_detected). exclusion_detected is
-    True if ANY qualifying occurrence — even a later, deduped-away repeat —
-    was immediately preceded by an exclusion trigger, so the caller can
-    refuse to match rather than silently including the excluded student.
+    Returns (name_like_tokens, exclusion_detected, first_after_for).
+    exclusion_detected is True if ANY qualifying occurrence — even a later,
+    deduped-away repeat — was immediately preceded by an exclusion trigger,
+    so the caller can refuse to match rather than silently including the
+    excluded student. first_after_for is True when the FIRST emitted token
+    was immediately preceded by the word "for" (the grading DSL's
+    student-scoping preposition, "grade <session> for <name>"), which marks
+    even a multi-word phrase ("for Ali Hassan") as a deliberate student
+    reference rather than a stray non-grading question.
     """
     tokens = re.findall(r"[A-Za-z]+", instruction)
     tokens_lower = [t.lower() for t in tokens]
@@ -116,6 +132,7 @@ def _extract_name_like_tokens(
     seen_lower: set[str] = set()
     result: list[str] = []
     exclusion_detected = False
+    first_after_for = False
     for idx, token in enumerate(tokens):
         lower = tokens_lower[idx]
         if len(lower) < _MIN_TOKEN_LEN:
@@ -126,9 +143,11 @@ def _extract_name_like_tokens(
             exclusion_detected = True
         if lower in seen_lower:
             continue
+        if not result and idx >= 1 and tokens_lower[idx - 1] == "for":
+            first_after_for = True
         seen_lower.add(lower)
         result.append(token)
-    return result, exclusion_detected
+    return result, exclusion_detected, first_after_for
 
 
 def _candidate_students(db: DBSession, session_id: int) -> list[User]:
@@ -162,7 +181,9 @@ def parse_grading_filter(instruction: str, session_id: int, db: DBSession) -> di
     for the exact five return shapes.
     """
     exclude = _title_words(db, session_id)
-    name_like_tokens, exclusion_detected = _extract_name_like_tokens(instruction, exclude)
+    name_like_tokens, exclusion_detected, first_after_for = _extract_name_like_tokens(
+        instruction, exclude
+    )
 
     if not name_like_tokens:
         return {"scope": "all"}
@@ -205,5 +226,15 @@ def parse_grading_filter(instruction: str, session_id: int, db: DBSession) -> di
                 {"student_id": s.id, "student_name": s.name} for s in matched
             ],
         }
+
+    # Nothing matched a student. Distinguish a genuine (mistyped/absent)
+    # student reference from a non-grading instruction that merely sat next
+    # to a session name. A run of 2+ leftover words NOT introduced by "for"
+    # (e.g. "how many assignments are ungraded") is prose, not a name — a
+    # single word, or any "for <name>" phrase, is still treated as a real
+    # student reference so "grade Week 3 Day 1 for Zaid" keeps its precise
+    # student_not_found message.
+    if len(name_like_tokens) >= 2 and not first_after_for:
+        return {"scope": "unrecognized"}
 
     return {"scope": "not_found", "attempted_name": name_like_tokens[0]}

@@ -114,6 +114,9 @@ def _resolve_chat_instruction(instruction: str, current_user: User, db: Session)
             "reason": filter_result["reason"],
         }
 
+    if filter_result["scope"] == "unrecognized":
+        return {"status": "unrecognized_instruction"}
+
     # filter_result["scope"] is "all" or "student" here.
     student_id = filter_result["student_id"] if filter_result["scope"] == "student" else None
     student_name = filter_result["student_name"] if filter_result["scope"] == "student" else None
