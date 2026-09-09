@@ -148,22 +148,34 @@ describe("<GradingChat /> — progressive streaming", () => {
     // Nothing yet — the stream is open but has yielded nothing.
     expect(screen.queryByText(/a\.ipynb/)).not.toBeInTheDocument();
 
-    await stream.emit({ event: "checking", student_id: 6, filename: "a.ipynb" });
+    await stream.emit({
+      event: "checking", student_id: 6, student_name: "Fiza", filename: "a.ipynb",
+    });
     await waitFor(() => expect(screen.getByText(/Checking/)).toBeInTheDocument());
     expect(screen.getByText(/a\.ipynb/)).toBeInTheDocument();
+    // Names the right student for this file.
+    expect(screen.getByText(/for Fiza/)).toBeInTheDocument();
     // The later file has NOT appeared yet — proof this is not batched.
     expect(screen.queryByText(/b\.ipynb/)).not.toBeInTheDocument();
     // And no summary yet.
     expect(screen.queryByText(/graded ·/)).not.toBeInTheDocument();
 
-    await stream.emit({ event: "graded", student_id: 6, filename: "a.ipynb", score: 8.5 });
+    await stream.emit({
+      event: "graded", student_id: 6, student_name: "Fiza", filename: "a.ipynb", score: 8.5,
+    });
     await waitFor(() => expect(screen.getByText(/8\.5 \/ 10/)).toBeInTheDocument());
+    // Both the "checking" and "graded" lines for a.ipynb name Fiza.
+    expect(screen.getAllByText(/for Fiza/).length).toBe(2);
     expect(screen.queryByText(/b\.ipynb/)).not.toBeInTheDocument();
 
-    await stream.emit({ event: "checking", student_id: 7, filename: "b.ipynb" });
+    await stream.emit({
+      event: "checking", student_id: 7, student_name: "Soph", filename: "b.ipynb",
+    });
     await waitFor(() => expect(screen.getByText(/b\.ipynb/)).toBeInTheDocument());
     // The first file's result is still on screen — events accumulate.
     expect(screen.getByText(/8\.5 \/ 10/)).toBeInTheDocument();
+    // Two different students named correctly for their own files in the same batch.
+    expect(screen.getByText(/for Soph/)).toBeInTheDocument();
 
     await stream.emit({
       event: "summary",
@@ -184,8 +196,11 @@ describe("<GradingChat /> — progressive streaming", () => {
   it("shows failed files and the failure list without aborting the run", async () => {
     streamChatMock.mockReturnValue(
       streamOf(
-        { event: "checking", student_id: 6, filename: "bad.ipynb" },
-        { event: "failed", student_id: 6, filename: "bad.ipynb", error: "No rubric" },
+        { event: "checking", student_id: 6, student_name: "Fiza", filename: "bad.ipynb" },
+        {
+          event: "failed", student_id: 6, student_name: "Fiza", filename: "bad.ipynb",
+          error: "No rubric",
+        },
         {
           event: "summary",
           total: 1,
@@ -200,6 +215,8 @@ describe("<GradingChat /> — progressive streaming", () => {
     await send();
 
     await waitFor(() => expect(screen.getByText(/Failed/)).toBeInTheDocument());
+    // Both the "checking" and "failed" lines for this file name Fiza.
+    expect(screen.getAllByText(/for Fiza/).length).toBe(2);
     expect(screen.getByText(/0 graded · 1 failed · 1 total/)).toBeInTheDocument();
     expect(screen.getByText(/bad\.ipynb: No rubric/)).toBeInTheDocument();
   });
@@ -398,7 +415,10 @@ describe("<GradingChat /> — no raw error text reaches the UI", () => {
   it("renders the backend's clean failure message as-is", async () => {
     streamChatMock.mockReturnValue(
       streamOf(
-        { event: "failed", student_id: 2, filename: "a.ipynb", error: CLEAN_UNAVAILABLE },
+        {
+          event: "failed", student_id: 2, student_name: "Fiza", filename: "a.ipynb",
+          error: CLEAN_UNAVAILABLE,
+        },
         {
           event: "summary",
           total: 1,
@@ -444,6 +464,7 @@ describe("<GradingChat /> — no raw error text reaches the UI", () => {
       streamOf({
         event: "failed",
         student_id: 2,
+        student_name: "Fiza",
         filename: "a.ipynb",
         error: RAW_DUMP,
       }),

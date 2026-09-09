@@ -29,13 +29,19 @@
  *
  * Message rendering — as-is, with one backstop
  * --------------------------------------------
- * Every message from the backend is rendered verbatim. Nothing here reformats,
- * truncates or parses it; the only string inspection in this file is
+ * The outcome and summary messages (`turn.outcome.message`, `turn.summary.message`)
+ * come from the backend and are rendered verbatim — nothing here reformats,
+ * truncates or parses them; the only string inspection done on them is
  * `summaryNamesSession` above, which routes and never edits what is shown.
  *
- * The single exception is `safeChatText`, which passes a normal message
- * through untouched and swaps in a generic line only when the text looks like
- * raw internals (see lib/chat-safety.ts). The backend already sanitises the
+ * The per-file `checking`/`graded`/`failed` lines are the one exception: the
+ * backend has no message text for these (grade_session_batch only carries
+ * raw fields — student_id/student_name/filename/score/error), so `EventLine`
+ * below builds "Checking X for Y…" etc. itself from those fields.
+ *
+ * Separately, `safeChatText` passes a normal backend message through
+ * untouched and swaps in a generic line only when the text looks like raw
+ * internals (see lib/chat-safety.ts). The backend already sanitises the
  * known all-providers-failed case; this catches anything that slips past it.
  */
 
@@ -301,22 +307,24 @@ function EventLine({ event }: { event: GradingEvent }) {
   if (event.event === "checking") {
     return (
       <>
-        <span aria-hidden>⏳</span> Checking <strong>{event.filename}</strong>…
+        <span aria-hidden>⏳</span> Checking <strong>{event.filename}</strong> for{" "}
+        {event.student_name}…
       </>
     );
   }
   if (event.event === "graded") {
     return (
       <>
-        <span aria-hidden>✓</span> Graded <strong>{event.filename}</strong> —{" "}
-        {event.score} / 10
+        <span aria-hidden>✓</span> Graded <strong>{event.filename}</strong> for{" "}
+        {event.student_name} — {event.score} / 10
       </>
     );
   }
   if (event.event === "failed") {
     return (
       <span className="text-red-700">
-        <span aria-hidden>✕</span> Failed <strong>{event.filename}</strong> —{" "}
+        <span aria-hidden>✕</span> Failed <strong>{event.filename}</strong> for{" "}
+        {event.student_name} —{" "}
         {safeChatText(
           event.error,
           `failed event for ${event.filename}`,

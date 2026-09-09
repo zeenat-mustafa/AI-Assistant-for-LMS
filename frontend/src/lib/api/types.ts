@@ -203,12 +203,14 @@ export type GradeSubmissionFileResult = Record<string, unknown>;
 export interface GradingCheckingEvent {
   event: "checking";
   student_id: number;
+  student_name: string;
   filename: string;
 }
 
 export interface GradingGradedEvent {
   event: "graded";
   student_id: number;
+  student_name: string;
   filename: string;
   score: number;
 }
@@ -216,6 +218,7 @@ export interface GradingGradedEvent {
 export interface GradingFailedEvent {
   event: "failed";
   student_id: number;
+  student_name: string;
   filename: string;
   error: string;
 }

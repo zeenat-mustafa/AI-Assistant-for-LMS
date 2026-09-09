@@ -413,6 +413,7 @@ class TestGradeSessionBatch:
 
         assert len(failed_events) == 1
         assert failed_events[0]["student_id"] == 3
+        assert failed_events[0]["student_name"] == "Bob"
         assert failed_events[0]["filename"] == "bob_hw1.ipynb"
         assert isinstance(failed_events[0]["error"], str)
 
@@ -430,6 +431,70 @@ class TestGradeSessionBatch:
         assert "error" in failure
         assert failure["student_id"] == 3
         assert failure["filename"] == "bob_hw1.ipynb"
+        # The summary event's format is deliberately unchanged by the
+        # student-name fix (bugfix-chat-progress-student-name) — scoped to
+        # the three per-file events only.
+        assert "student_name" not in failure
+
+    def test_checking_and_graded_events_name_the_right_student(self, seeded_db, monkeypatch):
+        """
+        Each per-file event must carry the student_name of the student who
+        actually submitted that file: Alice (id=2) owns 300/301, Bob (id=3)
+        owns 302 — reused from the already-loaded Submission.student
+        relationship, not a new lookup.
+        """
+        _patch_pipeline(monkeypatch)
+
+        events = list(grade_session_batch(seeded_db, session_id=10))
+        by_filename = {
+            e["filename"]: e for e in events if e["event"] in ("checking", "graded", "failed")
+            and e["event"] == "checking"
+        }
+
+        assert by_filename["hw1.ipynb"]["student_name"] == "Alice"
+        assert by_filename["bonus.ipynb"]["student_name"] == "Alice"
+        assert by_filename["bob_hw1.ipynb"]["student_name"] == "Bob"
+
+        graded_events = [e for e in events if e["event"] == "graded"]
+        assert all(e["student_name"] == "Alice" for e in graded_events)
+
+    def test_falls_back_to_generic_label_for_empty_name(self, db, monkeypatch):
+        """
+        User.name is NOT NULL at the DB level, but nothing enforces non-empty
+        — an empty string is a real (if pathological) possibility. The event
+        must still carry something displayable rather than a blank string.
+        """
+        _patch_pipeline(monkeypatch)
+
+        db.add_all([
+            User(id=1, name="Prof", email="prof@x.com", hashed_password="h", role=UserRole.instructor),
+            User(id=2, name="", email="noname@x.com", hashed_password="h", role=UserRole.student),
+            LMSSession(id=10, title="DS101"),
+            UnsolvedFile(
+                id=100, session_id=10, original_filename="hw1.ipynb",
+                file_path="10/assignments/hw1.ipynb",
+                parsed_requirements_text="Do the thing.",
+                rubric_json=_rubric_json(),
+                rubric_generated=True,
+            ),
+            Submission(
+                id=200, session_id=10, student_id=2,
+                original_filename="hw1.ipynb",
+                uploaded_file_path="10/submissions/2/hw1.ipynb",
+            ),
+            SubmissionFile(
+                id=300, submission_id=200,
+                matched_unsolved_file_id=100,
+                original_filename="hw1.ipynb",
+                extracted_ipynb_path="10/submissions/2/hw1.ipynb",
+                graded=False,
+            ),
+        ])
+        db.commit()
+
+        events = list(grade_session_batch(db, session_id=10))
+        checking = next(e for e in events if e["event"] == "checking")
+        assert checking["student_name"] == "a student"
 
     def test_generator_never_raises(self, seeded_db, monkeypatch):
         """Even if grade_single_submission_file raises, the generator must not propagate."""
