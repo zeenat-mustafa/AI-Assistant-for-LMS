@@ -15,9 +15,9 @@
  *    submitter, so it is NEVER used to decide grading status. Presence in
  *    `per_file` is the signal, exactly as 5.4 resolved it instructor-side.
  * 2. `GradeRead.rationale` (the structured criterion breakdown) IS returned
- *    by this endpoint, but is deliberately not rendered. `feedback_text` is
- *    the student-facing surface; the structured rationale is reserved for
- *    the Extended-Goals "why this grade" chatbot.
+ *    by this endpoint and, as of bugfix-structured-rationale-display, IS the
+ *    primary detail rendered per file (via the shared `GradeFileRow`) --
+ *    `feedback_text` is now only a fallback for when `rationale` is missing.
  */
 
 import type { GradeSummary, SubmissionRead } from "@/lib/api";

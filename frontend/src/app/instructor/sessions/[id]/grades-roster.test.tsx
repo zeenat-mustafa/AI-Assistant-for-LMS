@@ -146,6 +146,53 @@ describe("<GradesRoster />", () => {
     expect(screen.queryByText("a.ipynb")).not.toBeInTheDocument();
   });
 
+  it("renders the structured rationale as per-criterion blocks when present", async () => {
+    // bugfix-structured-rationale-display: same shared GradeFileRow as the
+    // student's own-grades view, so this pins the roster side of the wiring.
+    render(
+      <GradesRoster
+        report={report([
+          student({
+            per_file: [
+              grade({
+                id: 1,
+                original_filename: "a.ipynb",
+                rationale: [
+                  {
+                    criterion: "Correctness",
+                    points_possible: 6,
+                    points_awarded: 5,
+                    explanation: "Handles the main cases correctly.",
+                  },
+                  {
+                    criterion: "Style",
+                    points_possible: 4,
+                    points_awarded: 3.5,
+                    explanation: "Mostly PEP8-compliant.",
+                  },
+                ],
+              }),
+            ],
+          }),
+        ])}
+        error={null}
+        totalAssignmentFiles={1}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /show files/i }));
+
+    expect(screen.getByText("Correctness")).toBeInTheDocument();
+    expect(screen.getByText("5 / 6")).toBeInTheDocument();
+    expect(screen.getByText("Handles the main cases correctly.")).toBeInTheDocument();
+    expect(screen.getByText("Style")).toBeInTheDocument();
+    expect(screen.getByText("3.5 / 4")).toBeInTheDocument();
+    expect(screen.getByText("Mostly PEP8-compliant.")).toBeInTheDocument();
+    // No raw internal field names leak into the UI as literal text.
+    expect(document.body.textContent).not.toContain("points_awarded");
+    expect(document.body.textContent).not.toContain("points_possible");
+  });
+
   it("no longer shows the zero-submission footnote on either the empty or populated table", () => {
     // bugfix-roster-footnote: the limitation is real (see
     // phase5-known-gaps-record.txt) but the on-screen footnote describing it
