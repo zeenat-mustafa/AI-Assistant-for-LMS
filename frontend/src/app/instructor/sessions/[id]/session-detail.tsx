@@ -3,17 +3,19 @@
 /**
  * One session: its details, assignment-file upload, and the file list.
  *
- * Two kinds of file, two separate tables
- * --------------------------------------
- * A session holds gradeable NOTEBOOKS (`unsolved_files`) and downloadable
- * RESOURCES (`resource_files`) -- datasets, slides, PDFs bundled in a zip.
- * The backend keeps them in structurally separate tables and returns them as
- * two separate fields, so this page keeps two separate lists rather than one
- * list with a role flag. Only notebooks are gradeable and only notebooks
- * count toward the session's assignment total, but both kinds can be
- * removed -- notebook and resource ids collide (both tables start at 1), so
- * every id-keyed piece of state below (busy state, delete confirmation) is
- * keyed by role+id, never by the bare id.
+ * One list: exactly what was uploaded (bugfix-original-upload-preservation)
+ * ------------------------------------------------------------------------
+ * Any file type can be uploaded, single or inside a `.zip`. Whatever was
+ * uploaded is the ONLY thing shown or downloadable here -- a zip is one row
+ * with its own filename, never a list of what's inside it. Notebooks
+ * (standalone or bundled in a zip) are still extracted internally by the
+ * backend for grading, exactly as before; that extraction never surfaces as
+ * its own row here. Deleting a row removes the upload and everything it
+ * produced internally.
+ *
+ * `session.unsolved_files`/`resource_files` still ride along on `SessionRead`
+ * (used only to compute `totalAssignmentFiles` for the roster below) -- they
+ * are never rendered as their own list anymore.
  *
  * Upload goes through 5.1's `uploadAssignment`, which builds a `FormData`
  * and posts it with the bearer token -- deliberately not a `<form action>`
@@ -27,21 +29,16 @@ import Link from "next/link";
 import {
   ApiError,
   deleteAssignment,
-  deleteResource,
   downloadAssignment,
-  downloadResource,
   getGradeReport,
   getSession,
   listAssignments,
-  listResources,
   uploadAssignment,
 } from "@/lib/api";
 import type {
-  AssignmentUploadItem,
-  ResourceFileRead,
+  AssignmentUploadRead,
   SessionGradeReport,
   SessionRead,
-  UnsolvedFileRead,
 } from "@/lib/api";
 import { GradesRoster } from "./grades-roster";
 import { GradingChat } from "./grading-chat";
@@ -49,7 +46,6 @@ import { RequireAuth } from "@/components/require-auth";
 import { SignedInShell } from "@/components/signed-in-shell";
 import {
   EmptyState,
-  FileRoleBadge,
   FormError,
   FormNotice,
   Loading,
@@ -60,9 +56,6 @@ import {
 import { formatDate } from "@/lib/format";
 import { triggerBlobDownload } from "@/lib/download";
 
-/** Mirrors the backend's own `_ALLOWED_EXTENSIONS` in routers/assignments.py. */
-const ACCEPTED_EXTENSIONS = [".ipynb", ".zip"];
-
 /**
  * Fetch the session, returning the outcome rather than setting state, so the
  * caller can discard it if it is no longer wanted.
@@ -71,8 +64,8 @@ async function loadSessionDetail(
   sessionId: number,
 ): Promise<{ session: SessionRead } | { error: string }> {
   try {
-    // getSession already carries `unsolved_files`, so one request covers both
-    // the header and the initial file list.
+    // getSession already carries assignment_uploads, so one request covers
+    // both the header and the initial file list.
     return { session: await getSession(sessionId) };
   } catch (error) {
     return {
@@ -107,8 +100,7 @@ export function SessionDetail({ sessionId }: { sessionId: number }) {
 
 function SessionDetailBody({ sessionId }: { sessionId: number }) {
   const [session, setSession] = useState<SessionRead | null>(null);
-  const [files, setFiles] = useState<UnsolvedFileRead[] | null>(null);
-  const [resources, setResources] = useState<ResourceFileRead[] | null>(null);
+  const [uploads, setUploads] = useState<AssignmentUploadRead[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [report, setReport] = useState<SessionGradeReport | null>(null);
@@ -136,10 +128,7 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
         return;
       }
       setSession(result.session);
-      // getSession carries BOTH lists, so one request covers the header and
-      // both file sections -- no extra round trip for resources on mount.
-      setFiles(result.session.unsolved_files);
-      setResources(result.session.resource_files);
+      setUploads(result.session.assignment_uploads);
       setLoadError(null);
     });
     return () => {
@@ -163,12 +152,8 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
     };
   }, [sessionId]);
 
-  const refreshFiles = useCallback(async () => {
-    setFiles(await listAssignments(sessionId));
-  }, [sessionId]);
-
-  const refreshResources = useCallback(async () => {
-    setResources(await listResources(sessionId));
+  const refreshUploads = useCallback(async () => {
+    setUploads(await listAssignments(sessionId));
   }, [sessionId]);
 
   if (loadError) {
@@ -195,25 +180,14 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
       <UploadPanel
         sessionId={sessionId}
         onUploaded={(created) => {
-          // One upload can create rows in BOTH tables, so split the response
-          // on file_role and append each to its own list.
-          const notebooks = created.filter((item) => item.file_role === "notebook");
-          const uploadedResources = created.filter((item) => item.file_role === "resource");
-          if (notebooks.length > 0) {
-            setFiles((current) => [...(current ?? []), ...notebooks]);
-          }
-          if (uploadedResources.length > 0) {
-            setResources((current) => [...(current ?? []), ...uploadedResources]);
-          }
+          setUploads((current) => [...(current ?? []), ...created]);
         }}
       />
 
       <FileListPanel
         sessionId={sessionId}
-        files={files}
-        resources={resources}
-        onDeleted={refreshFiles}
-        onResourceDeleted={refreshResources}
+        uploads={uploads}
+        onDeleted={refreshUploads}
       />
 
       <GradingChat
@@ -222,13 +196,15 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
       />
 
       {/*
-        Notebooks only. Resources are never graded and must not inflate the
-        denominator of the combined score.
+        Notebooks extracted internally, not the uploads list -- resources are
+        never graded and must not inflate the denominator of the combined
+        score. Read straight off the session, since notebooks are no longer
+        separately listed/refreshed in this component.
       */}
       <GradesRoster
         report={report}
         error={reportError}
-        totalAssignmentFiles={files?.length ?? session.unsolved_files.length}
+        totalAssignmentFiles={session.unsolved_files.length}
       />
     </div>
   );
@@ -244,28 +220,14 @@ function BackLink() {
 
 // ── Upload ───────────────────────────────────────────────────────────────────
 
-/**
- * Summarise an upload response, which may contain notebooks, resources, or
- * both. Exported for direct testing -- the wording is the only place the
- * instructor learns that a zip's non-notebook contents were kept as
- * resources rather than silently dropped.
- */
-export function describeUpload(created: AssignmentUploadItem[]): string {
-  const notebooks = created.filter((item) => item.file_role === "notebook").length;
-  const resources = created.length - notebooks;
-
+/** Summarise an upload response -- one entry per file uploaded, whatever it was. */
+export function describeUpload(created: AssignmentUploadRead[]): string {
   if (created.length === 1) {
-    const only = created[0];
-    const kind = only.file_role === "notebook" ? "notebook" : "resource file";
-    return `Uploaded ${only.original_filename} as a ${kind}.`;
+    return `Uploaded ${created[0].original_filename}.`;
   }
-
-  const parts: string[] = [];
-  if (notebooks > 0) parts.push(`${notebooks} ${notebooks === 1 ? "notebook" : "notebooks"}`);
-  if (resources > 0) {
-    parts.push(`${resources} ${resources === 1 ? "resource file" : "resource files"}`);
-  }
-  return `Uploaded ${parts.join(" and ")}.`;
+  return `Uploaded ${created.length} files: ${created
+    .map((item) => item.original_filename)
+    .join(", ")}.`;
 }
 
 function UploadPanel({
@@ -273,7 +235,7 @@ function UploadPanel({
   onUploaded,
 }: {
   sessionId: number;
-  onUploaded: (created: AssignmentUploadItem[]) => void;
+  onUploaded: (created: AssignmentUploadRead[]) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState<File[]>([]);
@@ -293,22 +255,7 @@ function UploadPanel({
     setNotice(null);
 
     if (selected.length === 0) {
-      setError("Choose at least one .ipynb or .zip file first.");
-      return;
-    }
-
-    // Same rule the backend enforces, checked here so an obvious mistake
-    // doesn't cost a round trip. The backend still rejects anything that
-    // slips past this.
-    const rejected = selected.filter(
-      (file) => !ACCEPTED_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext)),
-    );
-    if (rejected.length > 0) {
-      setError(
-        `Only .ipynb or .zip files are accepted. Remove: ${rejected
-          .map((f) => f.name)
-          .join(", ")}`,
-      );
+      setError("Choose at least one file first.");
       return;
     }
 
@@ -336,7 +283,7 @@ function UploadPanel({
   return (
     <Panel
       title="Upload assignment files"
-      description="One or more .ipynb notebooks, or a .zip. A zip is extracted at any folder depth: .ipynb files become gradeable notebooks, and anything else (datasets, slides, PDFs) becomes a downloadable resource. A resource-only zip is fine."
+      description="Any file type, single or inside a .zip. What you upload is exactly what students and the grade report see -- a zip stays one file; notebooks inside it (standalone or nested) are still graded normally."
     >
       {error ? <FormError>{error}</FormError> : null}
       {notice ? <FormNotice>{notice}</FormNotice> : null}
@@ -354,7 +301,6 @@ function UploadPanel({
           type="file"
           name="files"
           multiple
-          accept=".ipynb,.zip"
           onChange={handleSelect}
           className="mb-4 block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border file:border-slate-300 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700"
         />
@@ -379,40 +325,26 @@ function UploadPanel({
 
 function FileListPanel({
   sessionId,
-  files,
-  resources,
+  uploads,
   onDeleted,
-  onResourceDeleted,
 }: {
   sessionId: number;
   /** null while loading. */
-  files: UnsolvedFileRead[] | null;
-  /** null while loading. */
-  resources: ResourceFileRead[] | null;
+  uploads: AssignmentUploadRead[] | null;
   onDeleted: () => Promise<void>;
-  onResourceDeleted: () => Promise<void>;
 }) {
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [confirmingId, setConfirmingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Ids collide across the two tables (both start at 1), so busy state and
-  // delete confirmation are both keyed by role+id, never by the bare id.
-  const busyKey = (role: "notebook" | "resource", id: number) => role + ":" + id;
-
-  async function handleDownload(
-    role: "notebook" | "resource",
-    file: { id: number; original_filename: string },
-  ) {
+  async function handleDownload(file: AssignmentUploadRead) {
     setError(null);
-    setBusyId(busyKey(role, file.id));
+    setBusyId(file.id);
     try {
-      // The endpoints require the bearer token, so a plain <a href> would
+      // The endpoint requires the bearer token, so a plain <a href> would
       // 401. Fetch the bytes with auth, then hand the browser a blob URL.
-      const blob =
-        role === "notebook"
-          ? await downloadAssignment(sessionId, file.id)
-          : await downloadResource(sessionId, file.id);
+      // Returns the ORIGINAL bytes exactly -- a zip downloads as that zip.
+      const blob = await downloadAssignment(sessionId, file.id);
       triggerBlobDownload(blob, file.original_filename);
     } catch (downloadError) {
       setError(
@@ -425,9 +357,9 @@ function FileListPanel({
     }
   }
 
-  async function handleDelete(file: UnsolvedFileRead) {
+  async function handleDelete(file: AssignmentUploadRead) {
     setError(null);
-    setBusyId(busyKey("notebook", file.id));
+    setBusyId(file.id);
     try {
       await deleteAssignment(sessionId, file.id);
       await onDeleted();
@@ -443,26 +375,7 @@ function FileListPanel({
     }
   }
 
-  async function handleDeleteResource(file: ResourceFileRead) {
-    setError(null);
-    setBusyId(busyKey("resource", file.id));
-    try {
-      await deleteResource(sessionId, file.id);
-      await onResourceDeleted();
-      setConfirmingId(null);
-    } catch (deleteError) {
-      setError(
-        deleteError instanceof ApiError
-          ? deleteError.detail
-          : `Could not remove ${file.original_filename}.`,
-      );
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  const loading = files === null || resources === null;
-  const nothingAtAll = !loading && files.length === 0 && resources.length === 0;
+  const loading = uploads === null;
 
   return (
     <Panel title="Assignment files">
@@ -470,154 +383,53 @@ function FileListPanel({
 
       {loading ? (
         <Loading>Loading files…</Loading>
-      ) : nothingAtAll ? (
+      ) : uploads.length === 0 ? (
         <EmptyState>No assignment files yet. Upload one above.</EmptyState>
       ) : (
-        <div className="space-y-6">
-          {/* Gradeable notebooks. */}
-          <section aria-labelledby="notebooks-heading">
-            <h3
-              id="notebooks-heading"
-              className="mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase"
-            >
-              Notebooks ({files.length})
-            </h3>
-            <p className="mb-2 text-xs text-slate-500">
-              Graded against a generated rubric. These are the files a student&apos;s
-              submission is matched against.
-            </p>
+        <ul className="divide-y divide-slate-200">
+          {uploads.map((file) => (
+            <li key={file.id} className="flex items-center justify-between gap-4 py-3">
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium text-slate-900">
+                  {file.original_filename}
+                </span>
+                <span className="block text-xs text-slate-500">
+                  Uploaded {formatDate(file.uploaded_at)}
+                </span>
+              </span>
 
-            {files.length === 0 ? (
-              <EmptyState>
-                No gradeable notebooks yet — this session has only resource files, so
-                there is nothing to grade.
-              </EmptyState>
-            ) : (
-              <ul className="divide-y divide-slate-200">
-                {files.map((file) => (
-                  <li
-                    key={file.id}
-                    className="flex items-center justify-between gap-4 py-3"
+              <span className="flex shrink-0 items-center gap-2">
+                <SmallButton
+                  onClick={() => handleDownload(file)}
+                  disabled={busyId === file.id}
+                >
+                  Download
+                </SmallButton>
+
+                {confirmingId === file.id ? (
+                  <>
+                    <SmallButton
+                      tone="danger"
+                      onClick={() => handleDelete(file)}
+                      disabled={busyId === file.id}
+                    >
+                      Confirm remove
+                    </SmallButton>
+                    <SmallButton onClick={() => setConfirmingId(null)}>Cancel</SmallButton>
+                  </>
+                ) : (
+                  <SmallButton
+                    tone="danger"
+                    onClick={() => setConfirmingId(file.id)}
+                    disabled={busyId === file.id}
                   >
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-slate-900">
-                          {file.original_filename}
-                        </span>
-                        <FileRoleBadge role="notebook" />
-                      </span>
-                      <span className="block text-xs text-slate-500">
-                        Uploaded {formatDate(file.uploaded_at)}
-                        {file.rubric_generated ? " · rubric ready" : " · no rubric yet"}
-                      </span>
-                    </span>
-
-                    <span className="flex shrink-0 items-center gap-2">
-                      <SmallButton
-                        onClick={() => handleDownload("notebook", file)}
-                        disabled={busyId === busyKey("notebook", file.id)}
-                      >
-                        Download
-                      </SmallButton>
-
-                      {confirmingId === busyKey("notebook", file.id) ? (
-                        <>
-                          <SmallButton
-                            tone="danger"
-                            onClick={() => handleDelete(file)}
-                            disabled={busyId === busyKey("notebook", file.id)}
-                          >
-                            Confirm remove
-                          </SmallButton>
-                          <SmallButton onClick={() => setConfirmingId(null)}>
-                            Cancel
-                          </SmallButton>
-                        </>
-                      ) : (
-                        <SmallButton
-                          tone="danger"
-                          onClick={() => setConfirmingId(busyKey("notebook", file.id))}
-                          disabled={busyId === busyKey("notebook", file.id)}
-                        >
-                          Remove
-                        </SmallButton>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          {/* Resource files -- same download + remove pattern as notebooks. */}
-          {resources.length > 0 ? (
-            <section aria-labelledby="resources-heading">
-              <h3
-                id="resources-heading"
-                className="mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase"
-              >
-                Resource files ({resources.length})
-              </h3>
-              <p className="mb-2 text-xs text-slate-500">
-                Supporting material — datasets, slides, PDFs. Downloadable by students,
-                never graded, and not counted in the combined score.
-              </p>
-
-              <ul className="divide-y divide-slate-200">
-                {resources.map((file) => (
-                  <li
-                    key={file.id}
-                    className="flex items-center justify-between gap-4 py-3"
-                  >
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-slate-900">
-                          {file.original_filename}
-                        </span>
-                        <FileRoleBadge role="resource" />
-                      </span>
-                      <span className="block text-xs text-slate-500">
-                        Uploaded {formatDate(file.uploaded_at)}
-                      </span>
-                    </span>
-
-                    <span className="flex shrink-0 items-center gap-2">
-                      <SmallButton
-                        onClick={() => handleDownload("resource", file)}
-                        disabled={busyId === busyKey("resource", file.id)}
-                      >
-                        Download
-                      </SmallButton>
-
-                      {confirmingId === busyKey("resource", file.id) ? (
-                        <>
-                          <SmallButton
-                            tone="danger"
-                            onClick={() => handleDeleteResource(file)}
-                            disabled={busyId === busyKey("resource", file.id)}
-                          >
-                            Confirm remove
-                          </SmallButton>
-                          <SmallButton onClick={() => setConfirmingId(null)}>
-                            Cancel
-                          </SmallButton>
-                        </>
-                      ) : (
-                        <SmallButton
-                          tone="danger"
-                          onClick={() => setConfirmingId(busyKey("resource", file.id))}
-                          disabled={busyId === busyKey("resource", file.id)}
-                        >
-                          Remove
-                        </SmallButton>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-        </div>
+                    Remove
+                  </SmallButton>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </Panel>
   );

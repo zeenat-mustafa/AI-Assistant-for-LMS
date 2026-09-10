@@ -22,11 +22,7 @@ export {
   listAssignments,
   assignmentDownloadUrl,
   downloadAssignment,
-  listResources,
-  resourceDownloadUrl,
-  downloadResource,
   deleteAssignment,
-  deleteResource,
   generateRubric,
 } from "./assignments";
 export {

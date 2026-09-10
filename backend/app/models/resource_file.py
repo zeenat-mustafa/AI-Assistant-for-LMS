@@ -34,6 +34,12 @@ class ResourceFile(Base):
     # Path relative to storage_root — stored in the same per-session
     # assignments directory as notebooks, since it is the same upload action.
     file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    # The AssignmentUpload row this resource was extracted from. Same
+    # provenance/cascade-cleanup purpose as UnsolvedFile.source_upload_id —
+    # see that model for the full explanation. NULL only for pre-existing rows.
+    source_upload_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assignment_uploads.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

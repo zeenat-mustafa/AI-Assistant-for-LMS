@@ -4,11 +4,15 @@
  * Student's view of one session: submission status, upload, own grades, and
  * the session's downloadable files.
  *
- * Files come in two kinds, from two structurally separate backend tables:
- * gradeable NOTEBOOKS (`unsolved_files`) and downloadable RESOURCES
- * (`resource_files`) -- datasets, slides, notes. Students need both: a
- * notebook that reads `titanic.csv` cannot be solved without the dataset.
- * They are rendered as two labelled lists, matching the instructor view.
+ * One list: exactly what the instructor uploaded
+ * ------------------------------------------------
+ * bugfix-original-upload-preservation: assignment files are shown and
+ * downloaded as one list of AssignmentUpload rows -- a zip is one row with
+ * its own filename, never a browsable list of the notebooks/resources
+ * extracted from it. A student who needs one notebook out of a bundled zip
+ * downloads the zip and extracts it themselves; there is deliberately no way
+ * to download just the piece inside it anymore, on either the instructor or
+ * student side.
  *
  * Every endpoint used is gated on `get_current_user`, not `require_instructor`,
  * so 5.3's authenticated blob-download helper works unchanged with a student
@@ -25,17 +29,15 @@ import Link from "next/link";
 import {
   ApiError,
   downloadAssignment,
-  downloadResource,
   getMyGrades,
   getMySubmission,
   getSession,
 } from "@/lib/api";
 import type {
+  AssignmentUploadRead,
   GradeSummary,
-  ResourceFileRead,
   SessionRead,
   SubmissionRead,
-  UnsolvedFileRead,
 } from "@/lib/api";
 import { MyGradesPanel } from "./my-grades-panel";
 import { SubmissionUploadPanel } from "./submission-upload-panel";
@@ -43,7 +45,6 @@ import { RequireAuth } from "@/components/require-auth";
 import { SignedInShell } from "@/components/signed-in-shell";
 import {
   EmptyState,
-  FileRoleBadge,
   FormError,
   Loading,
   Panel,
@@ -229,8 +230,7 @@ function StudentSessionBody({ sessionId }: { sessionId: number }) {
 
       <AssignmentFilesPanel
         sessionId={sessionId}
-        files={session.unsolved_files}
-        resources={session.resource_files}
+        uploads={session.assignment_uploads}
       />
     </div>
   );
@@ -303,35 +303,22 @@ function SubmissionStatusPanel({
 
 function AssignmentFilesPanel({
   sessionId,
-  files,
-  resources,
+  uploads,
 }: {
   sessionId: number;
-  files: UnsolvedFileRead[];
-  resources: ResourceFileRead[];
+  uploads: AssignmentUploadRead[];
 }) {
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Ids collide across the two tables (both start at 1), so busy state is
-  // keyed by role+id, never by the bare id.
-  const busyKey = (role: "notebook" | "resource", id: number) => role + ":" + id;
-
-  async function handleDownload(
-    role: "notebook" | "resource",
-    file: { id: number; original_filename: string },
-  ) {
+  async function handleDownload(file: AssignmentUploadRead) {
     setError(null);
-    setBusyId(busyKey(role, file.id));
+    setBusyId(file.id);
     try {
-      // Both endpoints require the bearer token, so a plain <a href> would
-      // 401. Same authenticated blob fetch the instructor page uses; the
-      // resources route is gated on get_current_user, not require_instructor,
-      // so a student token works here -- verified live, not assumed.
-      const blob =
-        role === "notebook"
-          ? await downloadAssignment(sessionId, file.id)
-          : await downloadResource(sessionId, file.id);
+      // Requires the bearer token, so a plain <a href> would 401. Returns
+      // the ORIGINAL bytes exactly -- a zip downloads as that zip, never a
+      // browsable list of what's inside it.
+      const blob = await downloadAssignment(sessionId, file.id);
       triggerBlobDownload(blob, file.original_filename);
     } catch (downloadError) {
       setError(
@@ -344,117 +331,38 @@ function AssignmentFilesPanel({
     }
   }
 
-  const nothingAtAll = files.length === 0 && resources.length === 0;
-
   return (
     <Panel
       title="Assignment files"
-      description="Download a notebook, solve it, then upload your solved copy. Resource files are supporting material — datasets, slides, notes — and are not graded."
+      description="Download a file, solve any notebooks inside it, then upload your solved copy. A zip downloads exactly as your instructor uploaded it."
     >
       {error ? <FormError>{error}</FormError> : null}
 
-      {nothingAtAll ? (
+      {uploads.length === 0 ? (
         <EmptyState>
           Your instructor hasn&apos;t uploaded any assignment files for this session yet.
         </EmptyState>
       ) : (
-        <div className="space-y-6">
-          <section aria-labelledby="student-notebooks-heading">
-            <h3
-              id="student-notebooks-heading"
-              className="mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase"
-            >
-              Notebooks ({files.length})
-            </h3>
-            <p className="mb-2 text-xs text-slate-500">
-              These are what you solve and upload. Your grade comes from these.
-            </p>
-
-            {files.length === 0 ? (
-              <EmptyState>
-                No notebooks to solve in this session yet — only resource files so far.
-              </EmptyState>
-            ) : (
-              <ul className="divide-y divide-slate-200">
-                {files.map((file) => (
-                  <li
-                    key={file.id}
-                    className="flex items-center justify-between gap-4 py-3"
-                  >
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-slate-900">
-                          {file.original_filename}
-                        </span>
-                        <FileRoleBadge role="notebook" />
-                      </span>
-                      <span className="block text-xs text-slate-500">
-                        Added {formatDate(file.uploaded_at)}
-                      </span>
-                    </span>
-                    <SmallButton
-                      onClick={() => handleDownload("notebook", file)}
-                      disabled={busyId === busyKey("notebook", file.id)}
-                    >
-                      {busyId === busyKey("notebook", file.id)
-                        ? "Downloading…"
-                        : "Download"}
-                    </SmallButton>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          {/*
-            A student needs the dataset and slides as much as the notebook --
-            a notebook that reads `titanic.csv` is unsolvable without it.
-            Download only: students never upload or remove these.
-          */}
-          {resources.length > 0 ? (
-            <section aria-labelledby="student-resources-heading">
-              <h3
-                id="student-resources-heading"
-                className="mb-1 text-xs font-semibold tracking-wide text-slate-500 uppercase"
+        <ul className="divide-y divide-slate-200">
+          {uploads.map((file) => (
+            <li key={file.id} className="flex items-center justify-between gap-4 py-3">
+              <span className="min-w-0">
+                <span className="truncate text-sm font-medium text-slate-900">
+                  {file.original_filename}
+                </span>
+                <span className="block text-xs text-slate-500">
+                  Added {formatDate(file.uploaded_at)}
+                </span>
+              </span>
+              <SmallButton
+                onClick={() => handleDownload(file)}
+                disabled={busyId === file.id}
               >
-                Resource files ({resources.length})
-              </h3>
-              <p className="mb-2 text-xs text-slate-500">
-                Supporting material your notebooks may need. Not graded, and not part
-                of your score.
-              </p>
-
-              <ul className="divide-y divide-slate-200">
-                {resources.map((file) => (
-                  <li
-                    key={file.id}
-                    className="flex items-center justify-between gap-4 py-3"
-                  >
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-slate-900">
-                          {file.original_filename}
-                        </span>
-                        <FileRoleBadge role="resource" />
-                      </span>
-                      <span className="block text-xs text-slate-500">
-                        Added {formatDate(file.uploaded_at)}
-                      </span>
-                    </span>
-                    <SmallButton
-                      onClick={() => handleDownload("resource", file)}
-                      disabled={busyId === busyKey("resource", file.id)}
-                    >
-                      {busyId === busyKey("resource", file.id)
-                        ? "Downloading…"
-                        : "Download"}
-                    </SmallButton>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-        </div>
+                {busyId === file.id ? "Downloading…" : "Download"}
+              </SmallButton>
+            </li>
+          ))}
+        </ul>
       )}
     </Panel>
   );

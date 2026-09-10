@@ -1,18 +1,22 @@
 /**
  * Student session detail: assignment list + downloads, and the submitted vs
  * not-submitted states (including that `null` is not an error).
+ *
+ * bugfix-original-upload-preservation: assignment files are one list of
+ * AssignmentUpload rows -- exactly what the instructor uploaded, one row per
+ * upload event. There is no separate notebooks/resources split in the UI
+ * anymore; a zip downloads as that zip.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { ApiError } from "@/lib/api";
 import type {
-  ResourceFileRead,
+  AssignmentUploadRead,
   SessionRead,
   SubmissionRead,
-  UnsolvedFileRead,
   UserRead,
 } from "@/lib/api";
 
@@ -26,7 +30,6 @@ vi.mock("next/navigation", () => ({
 const getSessionMock = vi.fn();
 const getMySubmissionMock = vi.fn();
 const downloadAssignmentMock = vi.fn();
-const downloadResourceMock = vi.fn();
 // 5.6 added the grades panel to this page; it must resolve, or its own error
 // banner becomes a second role="alert" and these assertions turn ambiguous.
 const getMyGradesMock = vi.fn();
@@ -37,7 +40,6 @@ vi.mock("@/lib/api", async (importOriginal) => {
     getSession: (...a: unknown[]) => getSessionMock(...a),
     getMySubmission: (...a: unknown[]) => getMySubmissionMock(...a),
     downloadAssignment: (...a: unknown[]) => downloadAssignmentMock(...a),
-    downloadResource: (...a: unknown[]) => downloadResourceMock(...a),
     getMyGrades: (...a: unknown[]) => getMyGradesMock(...a),
   };
 });
@@ -67,38 +69,26 @@ vi.mock("@/lib/auth/auth-context", async (importOriginal) => {
 
 import { StudentSessionDetail } from "./student-session-detail";
 
-function file(overrides: Partial<UnsolvedFileRead> = {}): UnsolvedFileRead {
+function upload(overrides: Partial<AssignmentUploadRead> = {}): AssignmentUploadRead {
   return {
     id: 8,
     session_id: 3,
     original_filename: "Numpy_and_Plotting.ipynb",
-    rubric_generated: true,
+    content_type: "application/octet-stream",
     uploaded_at: "2026-09-06T15:40:00",
     ...overrides,
   };
 }
 
-function resource(overrides: Partial<ResourceFileRead> = {}): ResourceFileRead {
-  return {
-    id: 1,
-    session_id: 3,
-    original_filename: "titanic.csv",
-    uploaded_at: "2026-09-09T18:00:00",
-    ...overrides,
-  };
-}
-
-function sessionWith(
-  files: UnsolvedFileRead[],
-  resources: ResourceFileRead[] = [],
-): SessionRead {
+function sessionWith(uploads: AssignmentUploadRead[]): SessionRead {
   return {
     id: 3,
     title: "Week 2 Day 1",
     instructor_id: 1,
     created_at: "2026-09-06T15:35:00",
-    unsolved_files: files,
-    resource_files: resources,
+    assignment_uploads: uploads,
+    unsolved_files: [],
+    resource_files: [],
   };
 }
 
@@ -129,7 +119,7 @@ async function renderDetail() {
 beforeEach(() => {
   vi.clearAllMocks();
   currentUser = STUDENT;
-  getSessionMock.mockResolvedValue(sessionWith([file()]));
+  getSessionMock.mockResolvedValue(sessionWith([upload()]));
   getMySubmissionMock.mockResolvedValue(null);
   getMyGradesMock.mockResolvedValue({
     student_id: 2,
@@ -147,17 +137,17 @@ describe("<StudentSessionDetail /> — session and assignment files", () => {
     expect(getSessionMock).toHaveBeenCalledWith(3);
   });
 
-  it("lists the assignment files", async () => {
+  it("lists exactly what was uploaded, one row per upload", async () => {
     getSessionMock.mockResolvedValue(
       sessionWith([
-        file({ id: 8, original_filename: "Numpy_and_Plotting.ipynb" }),
-        file({ id: 9, original_filename: "Pandas_Hands_on.ipynb" }),
+        upload({ id: 8, original_filename: "Numpy_and_Plotting.ipynb" }),
+        upload({ id: 9, original_filename: "week2.zip" }),
       ]),
     );
     await renderDetail();
 
     expect(screen.getByText("Numpy_and_Plotting.ipynb")).toBeInTheDocument();
-    expect(screen.getByText("Pandas_Hands_on.ipynb")).toBeInTheDocument();
+    expect(screen.getByText("week2.zip")).toBeInTheDocument();
   });
 
   it("shows an empty state when the instructor has uploaded nothing", async () => {
@@ -178,6 +168,19 @@ describe("<StudentSessionDetail /> — session and assignment files", () => {
 
     await waitFor(() => expect(downloadAssignmentMock).toHaveBeenCalledWith(3, 8));
     expect(createObjectURL).toHaveBeenCalledWith(blob);
+    vi.unstubAllGlobals();
+  });
+
+  it("downloads a zip exactly as uploaded -- one download, no browsing inside it", async () => {
+    getSessionMock.mockResolvedValue(sessionWith([upload({ id: 9, original_filename: "week2.zip" })]));
+    const blob = new Blob(["PK\x03\x04"], { type: "application/zip" });
+    downloadAssignmentMock.mockResolvedValue(blob);
+    vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:zip"), revokeObjectURL: vi.fn() });
+
+    await renderDetail();
+    await userEvent.click(screen.getByRole("button", { name: /download/i }));
+
+    await waitFor(() => expect(downloadAssignmentMock).toHaveBeenCalledWith(3, 9));
     vi.unstubAllGlobals();
   });
 
@@ -263,139 +266,5 @@ describe("<StudentSessionDetail /> — route protection", () => {
 
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/instructor"));
     expect(screen.queryByRole("heading", { name: "Week 2 Day 1" })).not.toBeInTheDocument();
-  });
-});
-
-/**
- * Fix B — a student can see and download resource files.
- *
- * A notebook that reads `titanic.csv` is unsolvable without the dataset, so
- * the resource list is not cosmetic. Mirrors Fix A's instructor-side tests:
- * two separate lists from the two separate backend fields, the same badges,
- * and each row calling its own endpoint.
- */
-describe("<StudentSessionDetail /> — resource files", () => {
-  it("lists resources alongside notebooks, in their own section", async () => {
-    getSessionMock.mockResolvedValue(
-      sessionWith(
-        [file({ id: 8, original_filename: "Numpy_and_Plotting.ipynb" })],
-        [
-          resource({ id: 1, original_filename: "titanic.csv" }),
-          resource({ id: 2, original_filename: "lecture9.txt" }),
-        ],
-      ),
-    );
-    await renderDetail();
-
-    await waitFor(() =>
-      expect(screen.getByText("Numpy_and_Plotting.ipynb")).toBeInTheDocument(),
-    );
-
-    const notebooks = screen.getByRole("region", { name: /notebooks \(1\)/i });
-    const resources = screen.getByRole("region", { name: /resource files \(2\)/i });
-
-    expect(within(notebooks).getByText("Numpy_and_Plotting.ipynb")).toBeInTheDocument();
-    expect(within(resources).getByText("titanic.csv")).toBeInTheDocument();
-    expect(within(resources).getByText("lecture9.txt")).toBeInTheDocument();
-    // Categorisation, not just presence.
-    expect(within(notebooks).queryByText("titanic.csv")).not.toBeInTheDocument();
-    expect(within(resources).queryByText("Numpy_and_Plotting.ipynb")).not.toBeInTheDocument();
-  });
-
-  it("uses the same gradeable/not-graded labelling as the instructor view", async () => {
-    getSessionMock.mockResolvedValue(
-      sessionWith([file({ id: 8 })], [resource({ id: 1 })]),
-    );
-    await renderDetail();
-
-    await waitFor(() =>
-      expect(screen.getByText("Gradeable notebook")).toBeInTheDocument(),
-    );
-    expect(screen.getByText(/Resource · not graded/)).toBeInTheDocument();
-  });
-
-  it("downloads a resource through the authenticated resources endpoint", async () => {
-    getSessionMock.mockResolvedValue(
-      sessionWith([], [resource({ id: 1, original_filename: "titanic.csv" })]),
-    );
-    const blob = new Blob(["a,b\n1,2\n"], { type: "application/octet-stream" });
-    downloadResourceMock.mockResolvedValue(blob);
-
-    const createObjectURL = vi.fn(() => "blob:mock-url");
-    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL: vi.fn() });
-
-    await renderDetail();
-    await userEvent.click(await screen.findByRole("button", { name: /download/i }));
-
-    await waitFor(() => expect(downloadResourceMock).toHaveBeenCalledWith(3, 1));
-    expect(downloadAssignmentMock).not.toHaveBeenCalled();
-    expect(createObjectURL).toHaveBeenCalledWith(blob);
-
-    vi.unstubAllGlobals();
-  });
-
-  it("keeps notebook and resource downloads apart when ids collide", async () => {
-    // Both tables start their ids at 1, so the same id can name a notebook and
-    // a resource in one session -- confirmed against the live backend.
-    getSessionMock.mockResolvedValue(
-      sessionWith(
-        [file({ id: 8, original_filename: "nb.ipynb" })],
-        [resource({ id: 8, original_filename: "data.csv" })],
-      ),
-    );
-    downloadAssignmentMock.mockResolvedValue(new Blob(["nb"]));
-    downloadResourceMock.mockResolvedValue(new Blob(["csv"]));
-    vi.stubGlobal("URL", {
-      ...URL,
-      createObjectURL: vi.fn(() => "blob:x"),
-      revokeObjectURL: vi.fn(),
-    });
-
-    await renderDetail();
-    await waitFor(() => expect(screen.getByText("nb.ipynb")).toBeInTheDocument());
-
-    const notebooks = screen.getByRole("region", { name: /notebooks \(1\)/i });
-    const resources = screen.getByRole("region", { name: /resource files \(1\)/i });
-
-    await userEvent.click(within(notebooks).getByRole("button", { name: /download/i }));
-    await waitFor(() => expect(downloadAssignmentMock).toHaveBeenCalledWith(3, 8));
-
-    await userEvent.click(within(resources).getByRole("button", { name: /download/i }));
-    await waitFor(() => expect(downloadResourceMock).toHaveBeenCalledWith(3, 8));
-
-    vi.unstubAllGlobals();
-  });
-
-  it("surfaces a failed resource download as an error", async () => {
-    getSessionMock.mockResolvedValue(
-      sessionWith([], [resource({ id: 1, original_filename: "titanic.csv" })]),
-    );
-    downloadResourceMock.mockRejectedValue(
-      new ApiError(404, "File is recorded in the database but not found on disk."),
-    );
-
-    await renderDetail();
-    await userEvent.click(await screen.findByRole("button", { name: /download/i }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(/not found on disk/);
-  });
-
-  it("says there is nothing to solve when the session has only resources", async () => {
-    getSessionMock.mockResolvedValue(sessionWith([], [resource({ id: 1 })]));
-    await renderDetail();
-
-    await waitFor(() => expect(screen.getByText("titanic.csv")).toBeInTheDocument());
-    expect(screen.getByText(/no notebooks to solve in this session yet/i)).toBeInTheDocument();
-  });
-
-  it("keeps the empty state when the session has no files of either kind", async () => {
-    getSessionMock.mockResolvedValue(sessionWith([], []));
-    await renderDetail();
-
-    await waitFor(() =>
-      expect(
-        screen.getByText(/hasn't uploaded any assignment files/i),
-      ).toBeInTheDocument(),
-    );
   });
 });
