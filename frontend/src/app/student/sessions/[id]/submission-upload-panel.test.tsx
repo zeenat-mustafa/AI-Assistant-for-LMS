@@ -48,6 +48,7 @@ function grades(overrides: Partial<GradeSummary> = {}): GradeSummary {
         feedback_text: "Good work.",
         rationale: null,
         graded_at: "2026-09-07T11:00:00",
+        graded_by_name: null,
       },
     ],
     combined_score: 3.5,

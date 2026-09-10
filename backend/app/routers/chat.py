@@ -156,7 +156,7 @@ def _with_message(payload: dict) -> dict:
 def chat(
     body: ChatInstruction,
     db: Annotated[Session, Depends(get_db)],
-    _instructor: Annotated[User, Depends(require_instructor)],
+    instructor: Annotated[User, Depends(require_instructor)],
 ) -> dict:
     """
     Resolves via _resolve_chat_instruction, then — if resolved — fully drains
@@ -173,7 +173,11 @@ def chat(
     student_id = resolution["student_id"]
     scope = "student" if student_id is not None else "all"
 
-    events = list(grade_session_batch(db, session_id, student_id=student_id))
+    events = list(
+        grade_session_batch(
+            db, session_id, student_id=student_id, graded_by_instructor_id=instructor.id,
+        )
+    )
     summary = events[-1] if events else {
         "event": "summary", "total": 0, "graded": 0, "failed": 0, "failures": [],
     }
@@ -199,7 +203,7 @@ def chat(
 def chat_stream(
     body: ChatInstruction,
     db: Annotated[Session, Depends(get_db)],
-    _instructor: Annotated[User, Depends(require_instructor)],
+    instructor: Annotated[User, Depends(require_instructor)],
 ) -> StreamingResponse:
     """
     Same resolution as POST /chat, same access control, but every branch
@@ -231,7 +235,9 @@ def chat_stream(
         scope = "student" if resolution["student_id"] is not None else "all"
 
         for event in grade_session_batch(
-            db, resolution["session_id"], student_id=resolution["student_id"]
+            db, resolution["session_id"],
+            student_id=resolution["student_id"],
+            graded_by_instructor_id=instructor.id,
         ):
             if event.get("event") == "summary":
                 event = {

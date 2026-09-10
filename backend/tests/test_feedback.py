@@ -399,6 +399,39 @@ class TestPersistGrade:
         # graded_at must fall within the test window
         assert before <= grade.graded_at.replace(tzinfo=timezone.utc) <= after
 
+    # ── bugfix-session-naming-attribution: graded_by_instructor_id ──────────
+
+    def test_sets_graded_by_instructor_id_when_given(self, seeded_db):
+        persist_grade(seeded_db, 300, GOOD_EVAL_RESULT, graded_by_instructor_id=1)
+
+        grade = seeded_db.query(Grade).filter(Grade.submission_file_id == 300).first()
+        assert grade.graded_by_instructor_id == 1
+
+    def test_graded_by_instructor_id_defaults_to_none(self, seeded_db):
+        """
+        The MCP grading tools call persist_grade's chain without this
+        argument at all -- confirming the default covers that path without
+        fabricating any value.
+        """
+        persist_grade(seeded_db, 300, GOOD_EVAL_RESULT)
+
+        grade = seeded_db.query(Grade).filter(Grade.submission_file_id == 300).first()
+        assert grade.graded_by_instructor_id is None
+
+    def test_regrade_updates_attribution_to_the_new_grader(self, seeded_db):
+        """A re-grade reflects who triggered the MOST RECENT run, not the original."""
+        persist_grade(seeded_db, 300, GOOD_EVAL_RESULT, graded_by_instructor_id=1)
+
+        seeded_db.add(
+            User(id=3, name="Prof Two", email="prof2@t.com", hashed_password="h", role=UserRole.instructor)
+        )
+        seeded_db.commit()
+
+        persist_grade(seeded_db, 300, GOOD_EVAL_RESULT, graded_by_instructor_id=3)
+
+        grade = seeded_db.query(Grade).filter(Grade.submission_file_id == 300).first()
+        assert grade.graded_by_instructor_id == 3
+
 
 # ===========================================================================
 # 4. generate_feedback_and_persist
@@ -449,6 +482,33 @@ class TestGenerateFeedbackAndPersist:
         grade = seeded_db.query(Grade).filter(Grade.submission_file_id == 300).first()
         assert grade is not None
         assert grade.score == 10.0
+
+    def test_threads_graded_by_instructor_id_through_to_the_grade_row(self, seeded_db):
+        """
+        The single shared persistence point (generate_feedback_and_persist ->
+        persist_grade) is what grade_single_submission_file and
+        grade_session_batch both funnel through regardless of which of the
+        three entry points (chat, direct REST, or a REST call routed via
+        grade_session_batch) triggered them -- so proving attribution here
+        is architecturally sufficient without exercising all three.
+        """
+        mock_nb = {"valid": True, "code_cells": [{"source": "x = 1", "outputs": []}]}
+        gemini_response = json.dumps({
+            "criteria": [
+                {"criterion": "Data Preprocessing", "points_possible": 3.0, "points_awarded": 3.0, "explanation": "Clean"},
+                {"criterion": "Model Training", "points_possible": 4.0, "points_awarded": 4.0, "explanation": "Trained"},
+                {"criterion": "Evaluation and Metrics", "points_possible": 3.0, "points_awarded": 3.0, "explanation": "Evaluated"},
+            ]
+        })
+
+        with patch("app.services.evaluator.parse_notebook_file", return_value=mock_nb):
+            with patch("app.services.evaluator.call_gemini_for_evaluation", return_value=gemini_response):
+                generate_feedback_and_persist(
+                    seeded_db, submission_file_id=300, graded_by_instructor_id=1,
+                )
+
+        grade = seeded_db.query(Grade).filter(Grade.submission_file_id == 300).first()
+        assert grade.graded_by_instructor_id == 1
 
     def test_unmatched_file_returns_failure_no_grade_row(self, seeded_db):
         """
@@ -716,7 +776,7 @@ class TestGradeSubmissionFileEndpoint:
             "app.services.feedback.generate_feedback_and_persist",
         ) as mock_fn:
             # Use the real persist path so a Grade row is actually written.
-            mock_fn.side_effect = lambda db, sfid: _real_persist(db, sfid)
+            mock_fn.side_effect = lambda db, sfid, **kwargs: _real_persist(db, sfid)
             c.post(
                 "/api/v1/sessions/10/submissions/files/300/grade",
                 headers={"Authorization": f"Bearer {instructor_token}"},

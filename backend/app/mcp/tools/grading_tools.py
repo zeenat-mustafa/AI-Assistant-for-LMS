@@ -24,6 +24,16 @@ or the student_id filter when a caller wants smaller units of work.
 
 Unlike evaluate_submission (4.4), these tools DO persist Grade rows —
 that is the whole point of the pipeline.
+
+Attribution
+───────────
+Grade.graded_by_instructor_id (bugfix-session-naming-attribution) is left
+null for every grade persisted through these tools. MCP has no auth
+layer — there is no authenticated instructor identity here to attribute,
+only unverified caller-supplied arguments (see match_session's
+instructor_id, kept purely for its own log line). Fabricating attribution
+from an unverified value would be worse than leaving it null, so neither
+tool below takes or forwards a graded_by_instructor_id at all.
 """
 
 import logging

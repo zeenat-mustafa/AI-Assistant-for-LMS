@@ -3,7 +3,10 @@
 import { apiFetch, type RequestOptions } from "./client";
 import type { BatchGradeResult, SessionList, SessionRead } from "./types";
 
-/** POST /sessions -- instructor only. 409 if the title is already theirs. */
+/**
+ * POST /sessions -- instructor only. 409 if the title is already taken --
+ * globally, not just by this instructor (shared workspace, see README).
+ */
 export function createSession(
   title: string,
   options: RequestOptions = {},
@@ -29,6 +32,19 @@ export function getSession(
   options: RequestOptions = {},
 ): Promise<SessionRead> {
   return apiFetch<SessionRead>(`/sessions/${sessionId}`, { ...options, method: "GET" });
+}
+
+/** PATCH /sessions/{id} -- instructor only, renames the session. 409 on a global title conflict. */
+export function renameSession(
+  sessionId: number,
+  title: string,
+  options: RequestOptions = {},
+): Promise<SessionRead> {
+  return apiFetch<SessionRead>(`/sessions/${sessionId}`, {
+    ...options,
+    method: "PATCH",
+    json: { title },
+  });
 }
 
 /** DELETE /sessions/{id} -- instructor only. 204, no body. */

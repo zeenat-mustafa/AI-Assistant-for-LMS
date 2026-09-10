@@ -1,9 +1,11 @@
 """
-Session CRUD — instructor only for create/delete, all authenticated users for read.
+Session CRUD — instructor only for create/rename/delete, all authenticated
+users for read.
 
 POST   /sessions                              → create a new session
 GET    /sessions                              → list all sessions (paginated)
 GET    /sessions/{session_id}                 → get one session with its assignment files
+PATCH  /sessions/{session_id}                 → rename a session (instructor only)
 DELETE /sessions/{session_id}                 → delete session + all stored files (instructor only)
 POST   /sessions/{session_id}/grade           → grade all ungraded submissions in a session (instructor only)
 """
@@ -17,7 +19,7 @@ from app.database import get_db
 from app.models.session import LMSSession
 from app.models.unsolved_file import UnsolvedFile
 from app.models.user import User
-from app.schemas.session import SessionCreate, SessionList, SessionRead
+from app.schemas.session import SessionCreate, SessionList, SessionRead, SessionUpdate
 from app.schemas.assignment_upload import AssignmentUploadRead
 from app.schemas.unsolved_file import UnsolvedFileRead
 from app.schemas.resource_file import ResourceFileRead
@@ -58,6 +60,34 @@ def _get_session_or_404(session_id: int, db: Session) -> LMSSession:
     return session
 
 
+def _check_title_available(
+    db: Session, title: str, *, exclude_session_id: int | None = None
+) -> None:
+    """
+    Raise 409 if *title* is already taken by a DIFFERENT session.
+
+    Global, not per-instructor: instructor access is a shared workspace, so
+    a duplicate title is a conflict regardless of who created the existing
+    session -- titles are what /chat instructions resolve by, and two
+    instructors sharing one title is exactly the ambiguity that can't be
+    resolved. `exclude_session_id` lets a rename keep its own current title
+    without tripping over itself.
+    """
+    query = db.query(LMSSession).filter(LMSSession.title == title)
+    if exclude_session_id is not None:
+        query = query.filter(LMSSession.id != exclude_session_id)
+    existing = query.first()
+    if existing:
+        owner = f" by {existing.instructor.name}" if existing.instructor else ""
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"A session titled '{title}' already exists (id={existing.id}"
+                f"{owner})."
+            ),
+        )
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post(
@@ -71,20 +101,7 @@ def create_session(
     db: Annotated[Session, Depends(get_db)],
     _instructor: Annotated[User, Depends(require_instructor)],
 ) -> SessionRead:
-    # Prevent duplicate titles for this instructor — they're used for fuzzy matching.
-    existing = (
-        db.query(LMSSession)
-        .filter(
-            LMSSession.title == body.title,
-            LMSSession.instructor_id == _instructor.id,
-        )
-        .first()
-    )
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"A session titled '{body.title}' already exists (id={existing.id}).",
-        )
+    _check_title_available(db, body.title)
     lms_session = LMSSession(title=body.title, instructor_id=_instructor.id)
     db.add(lms_session)
     db.commit()
@@ -127,6 +144,25 @@ def get_session(
     return _session_read(_get_session_or_404(session_id, db))
 
 
+@router.patch(
+    "/{session_id}",
+    response_model=SessionRead,
+    summary="Rename a session (instructor only)",
+)
+def rename_session(
+    session_id: int,
+    body: SessionUpdate,
+    db: Annotated[Session, Depends(get_db)],
+    _instructor: Annotated[User, Depends(require_instructor)],
+) -> SessionRead:
+    lms_session = _get_session_or_404(session_id, db)
+    _check_title_available(db, body.title, exclude_session_id=session_id)
+    lms_session.title = body.title
+    db.commit()
+    db.refresh(lms_session)
+    return _session_read(lms_session)
+
+
 @router.delete(
     "/{session_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -154,7 +190,7 @@ def delete_session(
 def grade_session(
     session_id: int,
     db: Annotated[Session, Depends(get_db)],
-    _instructor: Annotated[User, Depends(require_instructor)],
+    instructor: Annotated[User, Depends(require_instructor)],
 ) -> dict:
     """
     Eagerly drains the ``grade_session_batch`` generator and returns every
@@ -185,7 +221,9 @@ def grade_session(
 
     _get_session_or_404(session_id, db)
 
-    events: list[dict] = list(grade_session_batch(db, session_id))
+    events: list[dict] = list(
+        grade_session_batch(db, session_id, graded_by_instructor_id=instructor.id)
+    )
 
     # The summary is always the last event yielded by the generator.
     summary = events[-1] if events else {

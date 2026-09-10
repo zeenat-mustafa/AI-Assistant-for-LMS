@@ -4,7 +4,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { ApiError } from "@/lib/api";
@@ -18,12 +18,16 @@ vi.mock("next/navigation", () => ({
 
 const listSessionsMock = vi.fn();
 const createSessionMock = vi.fn();
+const renameSessionMock = vi.fn();
+const deleteSessionMock = vi.fn();
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
     listSessions: (...args: unknown[]) => listSessionsMock(...args),
     createSession: (...args: unknown[]) => createSessionMock(...args),
+    renameSession: (...args: unknown[]) => renameSessionMock(...args),
+    deleteSession: (...args: unknown[]) => deleteSessionMock(...args),
   };
 });
 
@@ -209,5 +213,115 @@ describe("<InstructorDashboard /> — create session", () => {
     // Still usable for a retry, and the typed title is preserved.
     expect(screen.getByRole("button", { name: /create session/i })).toBeEnabled();
     expect(screen.getByLabelText("Session title")).toHaveValue("Week 3 Day 1");
+  });
+});
+
+describe("<InstructorDashboard /> — rename", () => {
+  it("renames a session in place and reflects the new title", async () => {
+    listSessionsMock.mockResolvedValue({
+      total: 1,
+      items: [session({ id: 5, title: "Week 3 Day 1" })],
+    });
+    renameSessionMock.mockResolvedValue(
+      session({ id: 5, title: "Week 3 Day 1 (renamed)" }),
+    );
+
+    render(<InstructorDashboard />);
+    await screen.findByRole("link", { name: /week 3 day 1/i });
+
+    await userEvent.click(screen.getByRole("button", { name: /^rename$/i }));
+    const input = screen.getByDisplayValue("Week 3 Day 1");
+    await userEvent.clear(input);
+    await userEvent.type(input, "Week 3 Day 1 (renamed)");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(renameSessionMock).toHaveBeenCalledWith(5, "Week 3 Day 1 (renamed)"),
+    );
+    expect(
+      await screen.findByRole("link", { name: /week 3 day 1 \(renamed\)/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("can cancel a rename without calling the API", async () => {
+    listSessionsMock.mockResolvedValue({
+      total: 1,
+      items: [session({ id: 5, title: "Week 3 Day 1" })],
+    });
+
+    render(<InstructorDashboard />);
+    await screen.findByRole("link", { name: /week 3 day 1/i });
+
+    await userEvent.click(screen.getByRole("button", { name: /^rename$/i }));
+    await userEvent.clear(screen.getByDisplayValue("Week 3 Day 1"));
+    await userEvent.type(screen.getByLabelText(/rename/i), "Something else");
+    await userEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(renameSessionMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: /week 3 day 1/i })).toBeInTheDocument();
+  });
+
+  it("shows the backend's global-conflict 409 verbatim on rename, naming the other owner", async () => {
+    listSessionsMock.mockResolvedValue({
+      total: 1,
+      items: [session({ id: 5, title: "Week 3 Day 1" })],
+    });
+    renameSessionMock.mockRejectedValue(
+      new ApiError(
+        409,
+        "A session titled 'Week 2 Day 1' already exists (id=9 by Demo Instructor 2).",
+      ),
+    );
+
+    render(<InstructorDashboard />);
+    await screen.findByRole("link", { name: /week 3 day 1/i });
+
+    await userEvent.click(screen.getByRole("button", { name: /^rename$/i }));
+    await userEvent.clear(screen.getByDisplayValue("Week 3 Day 1"));
+    await userEvent.type(screen.getByLabelText(/rename/i), "Week 2 Day 1");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /already exists \(id=9 by Demo Instructor 2\)/,
+    );
+    // Still in edit mode for a retry -- nothing was silently discarded.
+    expect(screen.getByLabelText(/rename/i)).toHaveValue("Week 2 Day 1");
+  });
+});
+
+describe("<InstructorDashboard /> — delete", () => {
+  it("asks for confirmation before deleting, and removes the row after", async () => {
+    listSessionsMock.mockResolvedValue({
+      total: 1,
+      items: [session({ id: 5, title: "Week 3 Day 1" })],
+    });
+    deleteSessionMock.mockResolvedValue(undefined);
+
+    render(<InstructorDashboard />);
+    await screen.findByRole("link", { name: /week 3 day 1/i });
+
+    await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    expect(deleteSessionMock).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: /confirm delete/i }));
+
+    await waitFor(() => expect(deleteSessionMock).toHaveBeenCalledWith(5));
+    expect(screen.queryByRole("link", { name: /week 3 day 1/i })).not.toBeInTheDocument();
+  });
+
+  it("can back out of a delete", async () => {
+    listSessionsMock.mockResolvedValue({
+      total: 1,
+      items: [session({ id: 5, title: "Week 3 Day 1" })],
+    });
+
+    render(<InstructorDashboard />);
+    await screen.findByRole("link", { name: /week 3 day 1/i });
+
+    await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(deleteSessionMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: /week 3 day 1/i })).toBeInTheDocument();
   });
 });

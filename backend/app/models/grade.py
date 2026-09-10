@@ -17,6 +17,13 @@ class Grade(Base):
                         "points_awarded": float, "explanation": str}, ...]
                       Persisted cheaply here now; the "why did I get this score"
                       chatbot query is an Extended Goal (Section 10).
+    graded_by_instructor_id — who triggered this grading run. Nullable: the
+                      MCP grading tools have no auth layer and so genuinely
+                      cannot determine a triggering instructor (left null
+                      there, never fabricated), and pre-existing grades from
+                      before this column existed have no attribution either.
+                      Same nullable-FK-with-display-only-intent pattern as
+                      LMSSession.instructor_id.
 
     Re-grading overwrites the existing Grade row for the same submission_file_id
     (no versioning in MVP).
@@ -35,6 +42,9 @@ class Grade(Base):
     feedback_text: Mapped[str] = mapped_column(Text, nullable=False)
     # Full JSON blob — criterion-level breakdown.
     rationale_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    graded_by_instructor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     graded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -43,6 +53,9 @@ class Grade(Base):
     # ── Relationships ──────────────────────────────────────────────────────────
     submission_file: Mapped["SubmissionFile"] = relationship(  # noqa: F821
         "SubmissionFile", back_populates="grade"
+    )
+    graded_by_instructor: Mapped["User | None"] = relationship(  # noqa: F821
+        "User", back_populates="graded_grades"
     )
 
     def __repr__(self) -> str:

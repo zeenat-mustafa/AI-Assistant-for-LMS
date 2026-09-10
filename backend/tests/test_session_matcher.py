@@ -19,10 +19,12 @@ Cases covered
    invoked, its JSON response parsed into the matched shape.
 6. LLM fallback call raises an exception -> gracefully "no_match".
 7. Matching is shared across instructors, not scoped to a caller: another
-   instructor's session matches normally, and two different instructors'
-   identically-titled sessions are correctly "ambiguous" (the matcher has
-   no way to tell them apart -- this is a real, intended consequence of
-   the shared-workspace design, not a bug).
+   instructor's session matches normally by title. (Two different
+   instructors' sessions sharing one exact title used to be reachable and
+   correctly "ambiguous" -- that case is no longer possible to construct
+   at all since bugfix-session-naming-attribution made session titles
+   globally unique, so the DB itself now prevents the scenario this test
+   used to cover.)
 """
 
 from unittest.mock import patch
@@ -326,25 +328,6 @@ def test_matches_another_instructors_session(db):
 
     assert result["status"] == "matched"
     assert result["session_id"] == 1
-
-
-def test_identically_titled_sessions_across_instructors_are_ambiguous(db):
-    """
-    A real, intended consequence of removing instructor scoping: if two
-    different instructors happen to title their sessions identically, the
-    matcher can no longer tell them apart by title alone (it never could
-    within one instructor either -- this is the existing ambiguity
-    behaviour, just now reachable across instructor boundaries too).
-    """
-    instructor_a = _make_instructor(db, user_id=1, email="a@test.com")
-    instructor_b = _make_instructor(db, user_id=2, email="b@test.com")
-    _make_session(db, session_id=1, title="Week 8 Day 4", instructor_id=instructor_a.id)
-    _make_session(db, session_id=2, title="Week 8 Day 4", instructor_id=instructor_b.id)
-
-    result = match_instruction_to_session("Week 8 Day 4", db)
-
-    assert result["status"] == "ambiguous"
-    assert {c["session_id"] for c in result["candidates"]} == {1, 2}
 
 
 # ---------------------------------------------------------------------------

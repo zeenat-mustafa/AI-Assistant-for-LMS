@@ -10,6 +10,16 @@
  * is shown per session so it's still clear who created what -- informative,
  * not restrictive.
  *
+ * Rename and delete controls (bugfix-session-naming-attribution) live here
+ * rather than on the session detail page: this dashboard is already the
+ * canonical list of every session, so managing one doesn't require
+ * navigating into it first. Rename follows an inline edit-in-place pattern
+ * (no confirm step -- renaming isn't destructive); delete reuses the same
+ * confirm/cancel pattern as the assignment-file Remove button on the
+ * session detail page (frontend/src/app/instructor/sessions/[id]/
+ * session-detail.tsx's FileListPanel) so the two destructive actions in
+ * this app behave identically.
+ *
  * Plain `useEffect` + state rather than SWR/TanStack Query. The Next docs
  * recommend those once you need revalidation, polling or request dedup;
  * this page loads one list once, so a data library would be weight without
@@ -19,7 +29,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
-import { ApiError, createSession, listSessions } from "@/lib/api";
+import {
+  ApiError,
+  createSession,
+  deleteSession,
+  listSessions,
+  renameSession,
+} from "@/lib/api";
 import type { SessionRead } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import {
@@ -28,6 +44,7 @@ import {
   FormError,
   Loading,
   Panel,
+  SmallButton,
   SubmitButton,
 } from "@/components/ui";
 
@@ -105,8 +122,9 @@ export function InstructorDashboard() {
       setSessions((current) => [created, ...(current ?? [])]);
       setTitle("");
     } catch (error) {
-      // e.g. the backend's 409: "A session titled 'X' already exists (id=N)."
-      // Title uniqueness is per-instructor, not global.
+      // e.g. the backend's 409: "A session titled 'X' already exists
+      // (id=N by Instructor Name)." Title uniqueness is global, not
+      // per-instructor -- shared workspace, see README.
       setCreateError(
         error instanceof ApiError ? error.detail : "Could not create the session.",
       );
@@ -154,33 +172,186 @@ export function InstructorDashboard() {
             No sessions yet. Create one above to start uploading assignment files.
           </EmptyState>
         ) : (
-          <ul className="divide-y divide-slate-200">
-            {sessions.map((session) => (
-              <li key={session.id}>
-                <Link
-                  href={`/instructor/sessions/${session.id}`}
-                  className="flex items-center justify-between gap-4 py-3 transition hover:bg-slate-50"
-                >
-                  <span>
-                    <span className="block text-sm font-medium text-slate-900">
-                      {session.title}
-                    </span>
-                    <span className="block text-xs text-slate-500">
-                      {session.instructor_name ? `${session.instructor_name} · ` : ""}
-                      Created {formatDate(session.created_at)} ·{" "}
-                      {session.unsolved_files.length}{" "}
-                      {session.unsolved_files.length === 1 ? "file" : "files"}
-                    </span>
-                  </span>
-                  <span aria-hidden className="text-slate-400">
-                    →
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <SessionList
+            sessions={sessions}
+            onRenamed={(updated) =>
+              setSessions((current) =>
+                (current ?? []).map((s) => (s.id === updated.id ? updated : s)),
+              )
+            }
+            onDeleted={(id) =>
+              setSessions((current) => (current ?? []).filter((s) => s.id !== id))
+            }
+          />
         )}
       </Panel>
     </div>
+  );
+}
+
+function SessionList({
+  sessions,
+  onRenamed,
+  onDeleted,
+}: {
+  sessions: SessionRead[];
+  onRenamed: (session: SessionRead) => void;
+  onDeleted: (sessionId: number) => void;
+}) {
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renamePending, setRenamePending] = useState(false);
+
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  function startRename(session: SessionRead) {
+    setRenamingId(session.id);
+    setRenameValue(session.title);
+    setRenameError(null);
+  }
+
+  function cancelRename() {
+    setRenamingId(null);
+    setRenameError(null);
+  }
+
+  async function saveRename(session: SessionRead) {
+    const trimmed = renameValue.trim();
+    if (!trimmed) {
+      setRenameError("Session title is required.");
+      return;
+    }
+    if (trimmed === session.title) {
+      setRenamingId(null);
+      return;
+    }
+    setRenameError(null);
+    setRenamePending(true);
+    try {
+      const updated = await renameSession(session.id, trimmed);
+      onRenamed(updated);
+      setRenamingId(null);
+    } catch (error) {
+      // e.g. the backend's 409 naming the conflicting session and its owner.
+      setRenameError(
+        error instanceof ApiError ? error.detail : "Could not rename this session.",
+      );
+    } finally {
+      setRenamePending(false);
+    }
+  }
+
+  async function handleDelete(session: SessionRead) {
+    setDeleteError(null);
+    setBusyId(session.id);
+    try {
+      await deleteSession(session.id);
+      onDeleted(session.id);
+      setConfirmingDeleteId(null);
+    } catch (error) {
+      setDeleteError(
+        error instanceof ApiError
+          ? error.detail
+          : `Could not delete "${session.title}".`,
+      );
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <>
+      {deleteError ? <FormError>{deleteError}</FormError> : null}
+      <ul className="divide-y divide-slate-200">
+        {sessions.map((session) => {
+          const isRenaming = renamingId === session.id;
+          const isConfirmingDelete = confirmingDeleteId === session.id;
+          const isBusy = busyId === session.id;
+
+          return (
+            <li key={session.id} className="flex items-center justify-between gap-4 py-3">
+              {isRenaming ? (
+                <div className="min-w-0 flex-1">
+                  <input
+                    autoFocus
+                    aria-label={`Rename "${session.title}"`}
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void saveRename(session);
+                      if (e.key === "Escape") cancelRename();
+                    }}
+                    disabled={renamePending}
+                    className="w-full rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-slate-400 disabled:bg-slate-100"
+                  />
+                  {renameError ? (
+                    <p role="alert" className="mt-1 text-xs text-red-600">
+                      {renameError}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <Link
+                  href={`/instructor/sessions/${session.id}`}
+                  className="min-w-0 flex-1 rounded-md py-1 transition hover:bg-slate-50"
+                >
+                  <span className="block truncate text-sm font-medium text-slate-900">
+                    {session.title}
+                  </span>
+                  <span className="block text-xs text-slate-500">
+                    {session.instructor_name ? `${session.instructor_name} · ` : ""}
+                    Created {formatDate(session.created_at)} ·{" "}
+                    {session.unsolved_files.length}{" "}
+                    {session.unsolved_files.length === 1 ? "file" : "files"}
+                  </span>
+                </Link>
+              )}
+
+              <span className="flex shrink-0 items-center gap-2">
+                {isRenaming ? (
+                  <>
+                    <SmallButton onClick={() => saveRename(session)} disabled={renamePending}>
+                      {renamePending ? "Saving…" : "Save"}
+                    </SmallButton>
+                    <SmallButton onClick={cancelRename} disabled={renamePending}>
+                      Cancel
+                    </SmallButton>
+                  </>
+                ) : isConfirmingDelete ? (
+                  <>
+                    <SmallButton
+                      tone="danger"
+                      onClick={() => handleDelete(session)}
+                      disabled={isBusy}
+                    >
+                      Confirm delete
+                    </SmallButton>
+                    <SmallButton
+                      onClick={() => setConfirmingDeleteId(null)}
+                      disabled={isBusy}
+                    >
+                      Cancel
+                    </SmallButton>
+                  </>
+                ) : (
+                  <>
+                    <SmallButton onClick={() => startRename(session)}>Rename</SmallButton>
+                    <SmallButton
+                      tone="danger"
+                      onClick={() => setConfirmingDeleteId(session.id)}
+                    >
+                      Delete
+                    </SmallButton>
+                  </>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }

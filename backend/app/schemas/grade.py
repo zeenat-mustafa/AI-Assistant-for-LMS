@@ -23,6 +23,11 @@ class GradeRead(BaseModel):
     feedback_text: str
     rationale: list[RationaleEntry] | None = None
     graded_at: datetime
+    # Display name of the instructor who triggered this grading run. None
+    # for grades produced before this field existed, or via an MCP entry
+    # point (no auth layer there, so no instructor identity to attribute) —
+    # never fabricated, only ever a real name or absent.
+    graded_by_name: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -42,6 +47,11 @@ class GradeRead(BaseModel):
             feedback_text=grade_obj.feedback_text,
             rationale=rationale,
             graded_at=grade_obj.graded_at,
+            graded_by_name=(
+                grade_obj.graded_by_instructor.name
+                if grade_obj.graded_by_instructor
+                else None
+            ),
         )
 
 
