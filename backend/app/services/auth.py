@@ -117,6 +117,8 @@ def seed_demo_users(db: Session) -> None:
     Seeded accounts
     ---------------
     instructor@demo.com  / instructor123   — instructor
+    instructor2@demo.com / instructor2123  — instructor (multi-tenant testing)
+    instructor3@demo.com / instructor3123  — instructor (multi-tenant testing)
     student@demo.com     / student123      — student (student 1)
     student2@demo.com    / student2pass    — student
     student3@demo.com    / student3pass    — student
@@ -127,6 +129,20 @@ def seed_demo_users(db: Session) -> None:
         name="Demo Instructor",
         email=settings.demo_instructor_email,
         password=settings.demo_instructor_password,
+        role=UserRole.instructor,
+    )
+    _ensure_user(
+        db,
+        name="Demo Instructor 2",
+        email="instructor2@demo.com",
+        password="instructor2123",
+        role=UserRole.instructor,
+    )
+    _ensure_user(
+        db,
+        name="Demo Instructor 3",
+        email="instructor3@demo.com",
+        password="instructor3123",
         role=UserRole.instructor,
     )
     _ensure_user(

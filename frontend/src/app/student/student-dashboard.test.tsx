@@ -25,6 +25,7 @@ function session(overrides: Partial<SessionRead> = {}): SessionRead {
     id: 5,
     title: "Week 3 Day 1",
     instructor_id: 1,
+    instructor_name: "Demo Instructor",
     created_at: "2026-09-06T15:43:53.245057",
     assignment_uploads: [],
     unsolved_files: [],

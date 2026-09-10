@@ -1,7 +1,14 @@
 "use client";
 
 /**
- * Instructor dashboard: create a session, and list the ones they own.
+ * Instructor dashboard: create a session, and list every session in the
+ * workspace.
+ *
+ * Shared faculty workspace, deliberately (see README): any instructor can
+ * see/edit/grade any session regardless of who created it, so this loads
+ * every session, not just the current instructor's own. `instructor_name`
+ * is shown per session so it's still clear who created what -- informative,
+ * not restrictive.
  *
  * Plain `useEffect` + state rather than SWR/TanStack Query. The Next docs
  * recommend those once you need revalidation, polling or request dedup;
@@ -14,7 +21,6 @@ import Link from "next/link";
 
 import { ApiError, createSession, listSessions } from "@/lib/api";
 import type { SessionRead } from "@/lib/api";
-import { useAuth } from "@/lib/auth/auth-context";
 import { formatDate } from "@/lib/format";
 import {
   EmptyState,
@@ -26,38 +32,32 @@ import {
 } from "@/components/ui";
 
 /**
- * The backend caps `limit` at 200 and has no server-side instructor filter
- * (GET /sessions is literally "List all sessions"), so ownership is narrowed
- * client-side below. One page of 200 keeps that narrowing correct at demo
- * scale -- with real pagination, filtering a page after the fact would drop
- * sessions that sit beyond it. See the README note.
+ * The backend caps `limit` at 200. One page is a real (if generous) limit
+ * on total workspace-wide session count, not a narrowing of what any one
+ * instructor can see -- see the README note.
  */
 const PAGE_LIMIT = 200;
 
 /**
- * Load the sessions this instructor owns.
+ * Load every session in the workspace.
  *
  * Returns the outcome instead of setting state, so a stale response can be
  * discarded by the caller.
  */
-export async function loadOwnSessions(
-  instructorId: number,
-): Promise<{ sessions: SessionRead[] } | { error: string }> {
+export async function loadAllSessions(): Promise<
+  { sessions: SessionRead[] } | { error: string }
+> {
   try {
     const page = await listSessions({ limit: PAGE_LIMIT });
-    // `page.total` counts every instructor's sessions, so it is deliberately
-    // not shown anywhere -- the filtered array's length is the real count.
-    return { sessions: page.items.filter((s) => s.instructor_id === instructorId) };
+    return { sessions: page.items };
   } catch (error) {
     return {
-      error: error instanceof ApiError ? error.detail : "Could not load your sessions.",
+      error: error instanceof ApiError ? error.detail : "Could not load sessions.",
     };
   }
 }
 
 export function InstructorDashboard() {
-  const { user } = useAuth();
-
   // null = still loading; [] = loaded and genuinely empty.
   const [sessions, setSessions] = useState<SessionRead[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -67,14 +67,11 @@ export function InstructorDashboard() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
-  const instructorId = user?.id;
-
   useEffect(() => {
-    if (instructorId === undefined) return;
-    // Guards against a response for one user landing after a re-login as
-    // another, which would show the wrong person's sessions.
+    // Guards against a slow response landing after the component has
+    // already unmounted (e.g. navigating away mid-request).
     let cancelled = false;
-    void loadOwnSessions(instructorId).then((result) => {
+    void loadAllSessions().then((result) => {
       if (cancelled) return;
       if ("error" in result) {
         setLoadError(result.error);
@@ -87,7 +84,7 @@ export function InstructorDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [instructorId]);
+  }, []);
 
   async function handleCreate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -123,7 +120,9 @@ export function InstructorDashboard() {
       <div>
         <h1 className="text-2xl font-semibold text-slate-900">Sessions</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Create a session for each class, then upload its assignment notebooks.
+          Shared across every instructor — create a session for each class, then
+          upload its assignment notebooks. Anyone can view, edit, and grade any
+          session here, regardless of who created it.
         </p>
       </div>
 
@@ -145,11 +144,11 @@ export function InstructorDashboard() {
         </form>
       </Panel>
 
-      <Panel title="Your sessions">
+      <Panel title="All sessions">
         {loadError ? <FormError>{loadError}</FormError> : null}
 
         {sessions === null ? (
-          <Loading>Loading your sessions…</Loading>
+          <Loading>Loading sessions…</Loading>
         ) : sessions.length === 0 ? (
           <EmptyState>
             No sessions yet. Create one above to start uploading assignment files.
@@ -167,6 +166,7 @@ export function InstructorDashboard() {
                       {session.title}
                     </span>
                     <span className="block text-xs text-slate-500">
+                      {session.instructor_name ? `${session.instructor_name} · ` : ""}
                       Created {formatDate(session.created_at)} ·{" "}
                       {session.unsolved_files.length}{" "}
                       {session.unsolved_files.length === 1 ? "file" : "files"}

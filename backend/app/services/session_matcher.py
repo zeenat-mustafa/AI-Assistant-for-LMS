@@ -8,9 +8,14 @@ just phrases the reference loosely. Follows the same weighted-similarity /
 confidence-threshold philosophy as app/services/file_matcher.py (Phase 2),
 never force-matching when ambiguous.
 
+Matches across every instructor's sessions, not just the caller's own —
+instructor access is a shared faculty workspace by design (see README), not
+per-instructor isolation, so any instructor's instruction can resolve to any
+session.
+
 Public API
 ──────────
-    match_instruction_to_session(instruction, instructor_id, db) -> dict
+    match_instruction_to_session(instruction, db) -> dict
 """
 
 import difflib
@@ -312,22 +317,19 @@ def _match_via_llm(instruction: str, sessions: list[LMSSession]) -> dict:
 
 # ── 4. match_instruction_to_session ───────────────────────────────────────────
 
-def match_instruction_to_session(
-    instruction: str, instructor_id: int, db: DBSession
-) -> dict:
+def match_instruction_to_session(instruction: str, db: DBSession) -> dict:
     """
-    Identify which of this instructor's LMSSession rows *instruction* refers to.
+    Identify which LMSSession row *instruction* refers to, across every
+    instructor's sessions — not scoped to any single caller. Instructor
+    access is a shared faculty workspace by design: any instructor's
+    instruction can resolve to any session, regardless of who created it.
 
     Returns one of:
         {"status": "matched", "session_id": int, "session_title": str, "confidence": float}
         {"status": "ambiguous", "candidates": [{"session_id", "session_title", "confidence"}, ...]}
         {"status": "no_match"}
     """
-    sessions = (
-        db.query(LMSSession)
-        .filter(LMSSession.instructor_id == instructor_id)
-        .all()
-    )
+    sessions = db.query(LMSSession).all()
 
     if not sessions:
         return {"status": "no_match"}

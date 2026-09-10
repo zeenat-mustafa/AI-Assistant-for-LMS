@@ -18,8 +18,11 @@ Cases covered
 5. Vague instruction in the inconclusive middle band -> LLM fallback IS
    invoked, its JSON response parsed into the matched shape.
 6. LLM fallback call raises an exception -> gracefully "no_match".
-7. Sessions belonging to a different instructor are never matched, even
-   with an identical title.
+7. Matching is shared across instructors, not scoped to a caller: another
+   instructor's session matches normally, and two different instructors'
+   identically-titled sessions are correctly "ambiguous" (the matcher has
+   no way to tell them apart -- this is a real, intended consequence of
+   the shared-workspace design, not a bug).
 """
 
 from unittest.mock import patch
@@ -91,7 +94,7 @@ def test_exact_title_match(db):
     _make_session(db, session_id=1, title="Week 8 Day 4", instructor_id=instructor.id)
     _make_session(db, session_id=2, title="Week 1 Day 1", instructor_id=instructor.id)
 
-    result = match_instruction_to_session("Week 8 Day 4", instructor.id, db)
+    result = match_instruction_to_session("Week 8 Day 4", db)
 
     assert result["status"] == "matched"
     assert result["session_id"] == 1
@@ -109,7 +112,7 @@ def test_typo_partial_phrasing_matches_without_llm(db):
     _make_session(db, session_id=2, title="Week 1 Day 1", instructor_id=instructor.id)
 
     with patch("app.services.session_matcher.llm_provider.call_llm") as mock_call_llm:
-        result = match_instruction_to_session("week 8 day 3", instructor.id, db)
+        result = match_instruction_to_session("week 8 day 3", db)
 
     assert result["status"] == "matched"
     assert result["session_id"] == 1
@@ -132,7 +135,7 @@ def test_swapped_week_day_numbers_not_confused(db):
     _make_session(db, session_id=2, title="Week 1 Day 2", instructor_id=instructor.id)
 
     with patch("app.services.session_matcher.llm_provider.call_llm") as mock_call_llm:
-        result = match_instruction_to_session("grade week 2 day 1", instructor.id, db)
+        result = match_instruction_to_session("grade week 2 day 1", db)
 
     assert result["status"] == "matched"
     assert result["session_id"] == 1
@@ -165,7 +168,7 @@ def test_digit_only_near_miss_resolves_confidently(db):
     _make_session(db, session_id=5, title="Week 3 Day 1", instructor_id=instructor.id)
 
     with patch("app.services.session_matcher.llm_provider.call_llm") as mock_call_llm:
-        result = match_instruction_to_session("grade week 2 day 1", instructor.id, db)
+        result = match_instruction_to_session("grade week 2 day 1", db)
 
     assert result["status"] == "matched"
     assert result["session_id"] == 3
@@ -188,9 +191,7 @@ def test_ambiguous_two_similar_sessions(db):
     _make_session(db, session_id=3, title="Week 1 Day 1", instructor_id=instructor.id)
 
     with patch("app.services.session_matcher.llm_provider.call_llm") as mock_call_llm:
-        result = match_instruction_to_session(
-            "week 8 day 3 extra credit", instructor.id, db
-        )
+        result = match_instruction_to_session("week 8 day 3 extra credit", db)
 
     assert result["status"] == "ambiguous"
     mock_call_llm.assert_not_called()
@@ -222,7 +223,7 @@ def test_ambiguous_candidates_never_a_single_item_list(db):
     _make_session(db, session_id=2, title="Week 10 Day 3", instructor_id=instructor.id)
     _make_session(db, session_id=3, title="Week 1 Day 1", instructor_id=instructor.id)
 
-    result = match_instruction_to_session("grade week 10", instructor.id, db)
+    result = match_instruction_to_session("grade week 10", db)
 
     assert result["status"] == "ambiguous"
     assert len(result["candidates"]) >= 2
@@ -239,9 +240,7 @@ def test_no_match(db):
     _make_session(db, session_id=1, title="Week 1 Day 1", instructor_id=instructor.id)
     _make_session(db, session_id=2, title="Week 2 Day 1", instructor_id=instructor.id)
 
-    result = match_instruction_to_session(
-        "please grade the intro to blockchain workshop", instructor.id, db
-    )
+    result = match_instruction_to_session("please grade the intro to blockchain workshop", db)
 
     assert result["status"] == "no_match"
 
@@ -262,9 +261,7 @@ def test_llm_fallback_invoked_for_vague_instruction(db):
 
     with patch("app.services.session_matcher.llm_provider.call_llm") as mock_call_llm:
         mock_call_llm.return_value = '{"status": "matched", "session_id": 1}'
-        result = match_instruction_to_session(
-            "grade the rag session please", instructor.id, db
-        )
+        result = match_instruction_to_session("grade the rag session please", db)
 
     mock_call_llm.assert_called_once()
     assert result["status"] == "matched"
@@ -284,9 +281,7 @@ def test_llm_fallback_ambiguous_response_parsed(db):
 
     with patch("app.services.session_matcher.llm_provider.call_llm") as mock_call_llm:
         mock_call_llm.return_value = '{"status": "ambiguous", "session_ids": [1, 2]}'
-        result = match_instruction_to_session(
-            "grade the rag session please", instructor.id, db
-        )
+        result = match_instruction_to_session("grade the rag session please", db)
 
     assert result["status"] == "ambiguous"
     assert {c["session_id"] for c in result["candidates"]} == {1, 2}
@@ -305,30 +300,51 @@ def test_llm_fallback_exception_returns_no_match(db):
 
     with patch("app.services.session_matcher.llm_provider.call_llm") as mock_call_llm:
         mock_call_llm.side_effect = RuntimeError("boom")
-        result = match_instruction_to_session(
-            "grade the rag session please", instructor.id, db
-        )
+        result = match_instruction_to_session("grade the rag session please", db)
 
     assert result["status"] == "no_match"
 
 
 # ---------------------------------------------------------------------------
-# 7. Cross-instructor isolation
+# 7. Shared workspace: matching is not scoped to a calling instructor
 # ---------------------------------------------------------------------------
 
-def test_sessions_scoped_to_instructor(db):
+def test_matches_another_instructors_session(db):
+    """
+    Instructor access is a shared faculty workspace (see README) — any
+    instructor's instruction can resolve to any session, regardless of who
+    created it. There is no per-caller identity in match_instruction_to_
+    session at all any more; this just pins that a session owned by one
+    instructor matches normally when looked up by title alone.
+    """
+    instructor_a = _make_instructor(db, user_id=1, email="a@test.com")
+    instructor_b = _make_instructor(db, user_id=2, email="b@test.com")
+    _make_session(db, session_id=1, title="Week 8 Day 4", instructor_id=instructor_a.id)
+    _make_session(db, session_id=2, title="Week 1 Day 1", instructor_id=instructor_b.id)
+
+    result = match_instruction_to_session("Week 8 Day 4", db)
+
+    assert result["status"] == "matched"
+    assert result["session_id"] == 1
+
+
+def test_identically_titled_sessions_across_instructors_are_ambiguous(db):
+    """
+    A real, intended consequence of removing instructor scoping: if two
+    different instructors happen to title their sessions identically, the
+    matcher can no longer tell them apart by title alone (it never could
+    within one instructor either -- this is the existing ambiguity
+    behaviour, just now reachable across instructor boundaries too).
+    """
     instructor_a = _make_instructor(db, user_id=1, email="a@test.com")
     instructor_b = _make_instructor(db, user_id=2, email="b@test.com")
     _make_session(db, session_id=1, title="Week 8 Day 4", instructor_id=instructor_a.id)
     _make_session(db, session_id=2, title="Week 8 Day 4", instructor_id=instructor_b.id)
 
-    result_a = match_instruction_to_session("Week 8 Day 4", instructor_a.id, db)
-    result_b = match_instruction_to_session("Week 8 Day 4", instructor_b.id, db)
+    result = match_instruction_to_session("Week 8 Day 4", db)
 
-    assert result_a["status"] == "matched"
-    assert result_a["session_id"] == 1
-    assert result_b["status"] == "matched"
-    assert result_b["session_id"] == 2
+    assert result["status"] == "ambiguous"
+    assert {c["session_id"] for c in result["candidates"]} == {1, 2}
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +372,7 @@ def test_nonexistent_week_number_returns_no_match(db):
     instructor = _seed_week_day_grid(db)
     with patch("app.services.session_matcher.llm_provider.call_llm") as mock_llm:
         mock_llm.return_value = '{"status": "no_match"}'
-        result = match_instruction_to_session("grade week 7 day 2", instructor.id, db)
+        result = match_instruction_to_session("grade week 7 day 2", db)
     assert result["status"] == "no_match"
 
 
@@ -366,7 +382,7 @@ def test_nonexistent_day_number_returns_no_match(db):
     instructor = _seed_week_day_grid(db)
     with patch("app.services.session_matcher.llm_provider.call_llm") as mock_llm:
         mock_llm.return_value = '{"status": "no_match"}'
-        result = match_instruction_to_session("grade week 2 day 7", instructor.id, db)
+        result = match_instruction_to_session("grade week 2 day 7", db)
     assert result["status"] == "no_match"
 
 
@@ -377,24 +393,22 @@ def test_filler_verb_does_not_change_outcome(db):
     instructor = _seed_week_day_grid(db)
 
     # Real session — matched either way.
-    with_verb = match_instruction_to_session("grade week 3 day 1", instructor.id, db)
-    without_verb = match_instruction_to_session("week 3 day 1", instructor.id, db)
+    with_verb = match_instruction_to_session("grade week 3 day 1", db)
+    without_verb = match_instruction_to_session("week 3 day 1", db)
     assert with_verb["status"] == without_verb["status"] == "matched"
     assert with_verb["session_id"] == without_verb["session_id"]
 
     # Nonexistent week — no_match either way (was: ambiguous only with the verb).
     with patch("app.services.session_matcher.llm_provider.call_llm") as mock_llm:
         mock_llm.return_value = '{"status": "no_match"}'
-        with_verb_bad = match_instruction_to_session("grade week 7 day 2", instructor.id, db)
-        without_verb_bad = match_instruction_to_session("week 7 day 2", instructor.id, db)
+        with_verb_bad = match_instruction_to_session("grade week 7 day 2", db)
+        without_verb_bad = match_instruction_to_session("week 7 day 2", db)
     assert with_verb_bad["status"] == without_verb_bad["status"] == "no_match"
 
 
 def test_correct_instruction_still_matches_with_filler(db):
     # Guard against over-correction: a genuine, wordy instruction still matches.
     instructor = _seed_week_day_grid(db)
-    result = match_instruction_to_session(
-        "please grade the week 3 day 1 assignments", instructor.id, db
-    )
+    result = match_instruction_to_session("please grade the week 3 day 1 assignments", db)
     assert result["status"] == "matched"
     assert result["session_title"] == "Week 3 Day 1"

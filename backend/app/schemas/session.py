@@ -20,6 +20,10 @@ class SessionRead(BaseModel):
     id: int
     title: str
     instructor_id: int | None = None
+    # Display only -- instructor access is a shared faculty workspace (see
+    # README), so this is never used to gate who can see/edit a session,
+    # only to show who created it.
+    instructor_name: str | None = None
     created_at: datetime
     # What instructors actually uploaded, one row per upload event — a zip is
     # one row with its own filename, never a list of what's inside it. The

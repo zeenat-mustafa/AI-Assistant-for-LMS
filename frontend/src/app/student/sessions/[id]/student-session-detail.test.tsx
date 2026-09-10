@@ -85,6 +85,7 @@ function sessionWith(uploads: AssignmentUploadRead[]): SessionRead {
     id: 3,
     title: "Week 2 Day 1",
     instructor_id: 1,
+    instructor_name: "Demo Instructor",
     created_at: "2026-09-06T15:35:00",
     assignment_uploads: uploads,
     unsolved_files: [],
