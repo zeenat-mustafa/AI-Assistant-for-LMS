@@ -14,6 +14,7 @@ export {
   createSession,
   listSessions,
   getSession,
+  renameSession,
   deleteSession,
   gradeSession,
 } from "./sessions";

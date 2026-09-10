@@ -17,13 +17,16 @@
  * therefore never asked to guess: if it is rendering, the file is graded, and
  * "0 / 10" means the student scored zero.
  *
- * Content is unchanged from what these panels showed before except for one
- * thing (bugfix-structured-rationale-display): when the backend has a
+ * Content is unchanged from what these panels showed before except for two
+ * things: (bugfix-structured-rationale-display) when the backend has a
  * structured per-criterion breakdown (`GradeRead.rationale`), that renders as
  * the primary detail -- one block per criterion with its name, "X / Y", and
  * explanation -- instead of the flat `feedback_text` paragraph. `feedback_text`
  * is the fallback, shown only when `rationale` is missing or empty, exactly as
- * it rendered before this fix.
+ * it rendered before this fix. (bugfix-session-naming-attribution) a "Graded
+ * by {name}" line renders alongside the existing "Graded {date}" line when
+ * `graded_by_name` is present -- omitted entirely for historical/MCP grades
+ * with no attribution, never shown as "Graded by null" or similar.
  */
 
 import { useId, useState } from "react";
@@ -80,6 +83,9 @@ export function GradeFileRow({
         <p className="mt-0.5 text-xs text-slate-500">
           Graded {formatDate(grade.graded_at)}
         </p>
+        {grade.graded_by_name ? (
+          <p className="text-xs text-slate-500">Graded by {grade.graded_by_name}</p>
+        ) : null}
         {grade.rationale && grade.rationale.length > 0 ? (
           <ul className={dense ? "mt-1 space-y-1.5" : "mt-2 space-y-2"}>
             {grade.rationale.map((entry, index) => (

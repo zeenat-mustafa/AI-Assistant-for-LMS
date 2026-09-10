@@ -15,6 +15,19 @@ class SessionCreate(BaseModel):
         return v
 
 
+class SessionUpdate(BaseModel):
+    """Body for PATCH /sessions/{id} — rename an existing session."""
+    title: str
+
+    @field_validator("title")
+    @classmethod
+    def title_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Session title must not be empty.")
+        return v
+
+
 class SessionRead(BaseModel):
     """Full session detail including its assignment files."""
     id: int

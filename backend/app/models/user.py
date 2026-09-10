@@ -31,6 +31,9 @@ class User(Base):
     owned_sessions: Mapped[list["LMSSession"]] = relationship(  # noqa: F821
         "LMSSession", back_populates="instructor"
     )
+    graded_grades: Mapped[list["Grade"]] = relationship(  # noqa: F821
+        "Grade", back_populates="graded_by_instructor"
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r} role={self.role}>"

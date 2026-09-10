@@ -370,13 +370,13 @@ def _parse_sse_events(raw_text: str) -> list[dict]:
     return events
 
 
-def _fake_grade_session_batch(db, session_id, student_id=None):
+def _fake_grade_session_batch(db, session_id, student_id=None, **kwargs):
     yield {"event": "checking", "student_id": 2, "filename": "hw1.ipynb"}
     yield {"event": "graded", "student_id": 2, "filename": "hw1.ipynb", "score": 8.5}
     yield {"event": "summary", "total": 1, "graded": 1, "failed": 0, "failures": []}
 
 
-def _fake_grade_session_batch_with_failure(db, session_id, student_id=None):
+def _fake_grade_session_batch_with_failure(db, session_id, student_id=None, **kwargs):
     """3 files: 2 graded, 1 failed — exercises the summary message's counts."""
     yield {"event": "checking", "student_id": 2, "filename": "hw1.ipynb"}
     yield {"event": "graded", "student_id": 2, "filename": "hw1.ipynb", "score": 8.5}

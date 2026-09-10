@@ -269,7 +269,7 @@ def grade_submission_file(
     session_id: int,
     submission_file_id: int,
     db: Annotated[Session, Depends(get_db)],
-    _instructor: Annotated[User, Depends(require_instructor)],
+    instructor: Annotated[User, Depends(require_instructor)],
 ) -> dict:
     _get_session_or_404(session_id, db)
     sub_file = db.get(SubmissionFile, submission_file_id)
@@ -284,5 +284,7 @@ def grade_submission_file(
             detail=f"Submission file {submission_file_id} does not belong to session {session_id}.",
         )
     from app.services.grading_pipeline import grade_single_submission_file
-    return grade_single_submission_file(db, submission_file_id)
+    return grade_single_submission_file(
+        db, submission_file_id, graded_by_instructor_id=instructor.id
+    )
 

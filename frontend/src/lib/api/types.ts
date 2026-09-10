@@ -172,6 +172,13 @@ export interface GradeRead {
   /** null when `rationale_json` was absent or malformed. */
   rationale: RationaleEntry[] | null;
   graded_at: string;
+  /**
+   * Display name of the instructor who triggered this grading run. null
+   * for grades from before this field existed, or graded via an MCP entry
+   * point (no auth layer there) -- never a fabricated value, only ever a
+   * real name or absent.
+   */
+  graded_by_name: string | null;
 }
 
 /**

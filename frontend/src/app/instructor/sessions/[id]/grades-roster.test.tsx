@@ -17,6 +17,7 @@ function grade(overrides: Partial<GradeRead> = {}): GradeRead {
     feedback_text: "Solid work on the kernel timing section.",
     rationale: null,
     graded_at: "2026-09-06T16:00:00",
+    graded_by_name: null,
     ...overrides,
   };
 }
@@ -282,6 +283,51 @@ describe("<GradesRoster /> — collapsible per-file detail", () => {
 
     expect(screen.getByText("Good work on a.")).not.toBeVisible();
     expect(screen.getByText("Missing the plot in b.")).not.toBeVisible();
+  });
+
+  it("shows the Graded by line when the grade has attribution", async () => {
+    render(
+      <GradesRoster
+        report={report([
+          student({
+            per_file: [
+              grade({
+                id: 1,
+                original_filename: "a.ipynb",
+                graded_by_name: "Demo Instructor 2",
+              }),
+            ],
+          }),
+        ])}
+        error={null}
+        totalAssignmentFiles={1}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /show files/i }));
+    await userEvent.click(screen.getByRole("button", { name: /a\.ipynb/ }));
+
+    expect(screen.getByText("Graded by Demo Instructor 2")).toBeVisible();
+  });
+
+  it("omits the Graded by line for a grade with no attribution, not 'Graded by null'", async () => {
+    render(
+      <GradesRoster
+        report={report([
+          student({
+            per_file: [
+              grade({ id: 1, original_filename: "a.ipynb", graded_by_name: null }),
+            ],
+          }),
+        ])}
+        error={null}
+        totalAssignmentFiles={1}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /show files/i }));
+    await userEvent.click(screen.getByRole("button", { name: /a\.ipynb/ }));
+
+    expect(screen.queryByText(/graded by/i)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("null");
   });
 
   it("expands one file in place without touching the other", async () => {

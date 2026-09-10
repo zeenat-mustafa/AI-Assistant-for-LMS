@@ -14,7 +14,11 @@ class LMSSession(Base):
 
     __tablename__ = "lms_sessions"
     __table_args__ = (
-        UniqueConstraint("instructor_id", "title", name="uq_lms_sessions_instructor_title"),
+        # Global, not per-instructor: instructor access is a shared faculty
+        # workspace (see README), so two instructors having identically
+        # titled sessions is exactly the ambiguity /chat instructions can't
+        # resolve — one title now belongs to at most one session, period.
+        UniqueConstraint("title", name="uq_lms_sessions_title"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
@@ -25,7 +29,7 @@ class LMSSession(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     # Short, consistent title — e.g. "Week 8 Day 4". Used for fuzzy matching.
-    # Unique per-instructor (see __table_args__), not globally.
+    # Globally unique (see __table_args__), not per-instructor.
     title: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

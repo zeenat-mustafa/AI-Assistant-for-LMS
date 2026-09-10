@@ -3,11 +3,11 @@ Batch grading pipeline — Phase 2, Sub-feature 7/8.
 
 Provides two public callables:
 
-    grade_single_submission_file(db, submission_file_id) → dict
+    grade_single_submission_file(db, submission_file_id, graded_by_instructor_id=None) → dict
         Hardened wrapper around generate_feedback_and_persist.
         Never raises — always returns a success or failure dict.
 
-    grade_session_batch(db, session_id) → Generator[dict, None, None]
+    grade_session_batch(db, session_id, student_id=None, graded_by_instructor_id=None) → Generator[dict, None, None]
         Generator that grades every ungraded SubmissionFile in a Session
         one at a time, yielding progress events as it goes:
             {"event": "checking",  "student_id": int, "student_name": str, "filename": str}
@@ -73,7 +73,11 @@ def _user_facing_error(raw: object) -> str:
 
 # ── 1. grade_single_submission_file ──────────────────────────────────────────
 
-def grade_single_submission_file(db: Session, submission_file_id: int) -> dict[str, Any]:
+def grade_single_submission_file(
+    db: Session,
+    submission_file_id: int,
+    graded_by_instructor_id: int | None = None,
+) -> dict[str, Any]:
     """
     Hardened wrapper around ``generate_feedback_and_persist``.
 
@@ -88,6 +92,11 @@ def grade_single_submission_file(db: Session, submission_file_id: int) -> dict[s
         Active SQLAlchemy session.
     submission_file_id:
         PK of the SubmissionFile to grade.
+    graded_by_instructor_id:
+        The authenticated instructor who triggered this run, if known.
+        Passed straight through to ``persist_grade``; defaults to None for
+        callers that cannot determine one (the MCP grading tools have no
+        auth layer).
 
     Returns
     -------
@@ -143,7 +152,10 @@ def grade_single_submission_file(db: Session, submission_file_id: int) -> dict[s
     try:
         from app.services.feedback import generate_feedback_and_persist
 
-        result = generate_feedback_and_persist(db, submission_file_id)
+        result = generate_feedback_and_persist(
+            db, submission_file_id,
+            graded_by_instructor_id=graded_by_instructor_id,
+        )
 
         if result.get("success"):
             logger.info(
@@ -179,6 +191,7 @@ def grade_session_batch(
     db: Session,
     session_id: int,
     student_id: int | None = None,
+    graded_by_instructor_id: int | None = None,
 ) -> Generator[dict[str, Any], None, None]:
     """
     Generator that grades every ungraded SubmissionFile in a Session.
@@ -222,6 +235,10 @@ def grade_session_batch(
         are processed — everyone else in the session is left untouched.
         Default None preserves the exact original behavior: every ungraded
         file in the session.
+    graded_by_instructor_id:
+        The authenticated instructor who triggered this run, if known.
+        Passed straight through to every file's
+        ``grade_single_submission_file`` call.
     """
     from app.models.submission import Submission
     from app.models.submission_file import SubmissionFile
@@ -281,7 +298,10 @@ def grade_session_batch(
 
         # ── grade (never raises — double-guarded) ────────────────────────────
         try:
-            result = grade_single_submission_file(db, sub_file.id)
+            result = grade_single_submission_file(
+                db, sub_file.id,
+                graded_by_instructor_id=graded_by_instructor_id,
+            )
         except Exception as exc:  # noqa: BLE001 — last-resort safety net
             logger.error(
                 "grade_session_batch: unexpected exception escaping "

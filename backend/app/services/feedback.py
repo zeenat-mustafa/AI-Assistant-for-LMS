@@ -12,8 +12,8 @@ Public API
 ──────────
     build_feedback_text(evaluation_result)          → str
     build_rationale_json(evaluation_result)         → list[dict]
-    persist_grade(db, submission_file_id, result)   → dict
-    generate_feedback_and_persist(db, submission_file_id) → dict
+    persist_grade(db, submission_file_id, result, graded_by_instructor_id=None) → dict
+    generate_feedback_and_persist(db, submission_file_id, graded_by_instructor_id=None) → dict
 """
 
 import json
@@ -156,6 +156,7 @@ def persist_grade(
     db: Session,
     submission_file_id: int,
     evaluation_result: dict,
+    graded_by_instructor_id: int | None = None,
 ) -> dict:
     """
     Create or overwrite the Grade record for a SubmissionFile.
@@ -181,6 +182,13 @@ def persist_grade(
     evaluation_result:
         The ``{"success": True, "total_score": float, "criteria": [...]}``
         dict returned by ``evaluate_submission_file``.
+    graded_by_instructor_id:
+        The authenticated instructor who triggered this run, if known.
+        Defaults to None — the MCP grading tools have no auth layer and
+        genuinely cannot supply one, so they simply never pass it rather
+        than fabricating a value. A re-grade overwrites this along with
+        everything else, so the attribution always reflects who triggered
+        the MOST RECENT run, not the original one.
 
     Returns
     -------
@@ -215,6 +223,7 @@ def persist_grade(
         existing.feedback_text = feedback_text
         existing.rationale_json = rationale_json_str
         existing.graded_at = now
+        existing.graded_by_instructor_id = graded_by_instructor_id
         grade = existing
     else:
         grade = Grade(
@@ -223,6 +232,7 @@ def persist_grade(
             feedback_text=feedback_text,
             rationale_json=rationale_json_str,
             graded_at=now,
+            graded_by_instructor_id=graded_by_instructor_id,
         )
         db.add(grade)
         logger.info(
@@ -256,7 +266,11 @@ def persist_grade(
 
 # ── 4. generate_feedback_and_persist ─────────────────────────────────────────
 
-def generate_feedback_and_persist(db: Session, submission_file_id: int) -> dict:
+def generate_feedback_and_persist(
+    db: Session,
+    submission_file_id: int,
+    graded_by_instructor_id: int | None = None,
+) -> dict:
     """
     Top-level orchestrator for Sub-feature 5.
 
@@ -273,6 +287,8 @@ def generate_feedback_and_persist(db: Session, submission_file_id: int) -> dict:
         Active SQLAlchemy session.
     submission_file_id:
         PK of the SubmissionFile to evaluate and grade.
+    graded_by_instructor_id:
+        Passed straight through to ``persist_grade`` — see its docstring.
 
     Returns
     -------
@@ -299,7 +315,10 @@ def generate_feedback_and_persist(db: Session, submission_file_id: int) -> dict:
         return evaluation_result
 
     try:
-        persisted = persist_grade(db, submission_file_id, evaluation_result)
+        persisted = persist_grade(
+            db, submission_file_id, evaluation_result,
+            graded_by_instructor_id=graded_by_instructor_id,
+        )
     except Exception as exc:
         logger.error(
             "generate_feedback_and_persist: persist_grade failed for "
