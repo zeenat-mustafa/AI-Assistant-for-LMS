@@ -41,7 +41,6 @@ import type {
   SessionRead,
 } from "@/lib/api";
 import { GradesRoster } from "./grades-roster";
-import { GradingChat } from "./grading-chat";
 import { RequireAuth } from "@/components/require-auth";
 import { SignedInShell } from "@/components/signed-in-shell";
 import {
@@ -105,17 +104,6 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
 
   const [report, setReport] = useState<SessionGradeReport | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
-
-  /** Re-read the roster after a grading run that targeted this session. */
-  const refreshReport = useCallback(async () => {
-    const result = await loadGradeReport(sessionId);
-    if ("error" in result) {
-      setReportError(result.error);
-      return;
-    }
-    setReport(result.report);
-    setReportError(null);
-  }, [sessionId]);
 
   useEffect(() => {
     // Guards against a slow response for one session id landing after the
@@ -188,11 +176,6 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
         sessionId={sessionId}
         uploads={uploads}
         onDeleted={refreshUploads}
-      />
-
-      <GradingChat
-        sessionTitle={session.title}
-        onGraded={() => void refreshReport()}
       />
 
       {/*
