@@ -155,9 +155,12 @@ Sub-feature 5.4 (instructor grades roster + embedded grading chat)
   session_grade_report is built from Submission rows, so students who
   have submitted nothing never appear (the open Phase 1/2 gap). The whole
   API is 21 routes and auth.py exposes only login/me/register, so there
-  is no roster source to cross-reference against. Surfaced as a visible
-  footnote on the table rather than fixed. In the dev DB this is not
-  hypothetical: 8 students exist, 3 have ever submitted.
+  is no roster source to cross-reference against. In the dev DB this is
+  not hypothetical: 8 students exist, 3 have ever submitted. Originally
+  surfaced as a visible footnote on the roster table; bugfix-roster-footnote
+  removed that on-screen text as UI cleanup (instructors found it noisy),
+  but the underlying limitation is unchanged and still not fixed — it now
+  lives only here.
 
 - NO WAY TO CANCEL AN IN-FLIGHT GRADING RUN FROM THE UI. The panel
   aborts the fetch if the component unmounts, but the backend keeps
