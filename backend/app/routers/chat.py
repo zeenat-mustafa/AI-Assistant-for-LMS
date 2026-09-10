@@ -58,11 +58,17 @@ class ChatInstruction(BaseModel):
     instruction: str
 
 
-def _resolve_chat_instruction(instruction: str, current_user: User, db: Session) -> dict:
+def _resolve_chat_instruction(instruction: str, db: Session) -> dict:
     """
     Shared resolution logic for /chat and /chat/stream: session_matcher (3.1)
     -> instruction_filter (3.2). Extracted in 3.4 so both endpoints share one
     implementation instead of /chat/stream duplicating /chat's inlined logic.
+
+    Instruction resolution is not scoped to the calling instructor — any
+    instructor's instruction can resolve to any session (shared faculty
+    workspace, see README). The caller is still required to be an
+    instructor (role-gated via require_instructor on the routes below);
+    it just no longer has to be THIS session's creator.
 
     Returns one of:
       - An early-exit dict — exactly one of /chat's own "no_session_match" /
@@ -73,9 +79,7 @@ def _resolve_chat_instruction(instruction: str, current_user: User, db: Session)
          "student_id": int | None, "student_name": str | None} — the caller
         should proceed to grade_session_batch(db, session_id, student_id).
     """
-    session_match = match_instruction_to_session(
-        instruction, instructor_id=current_user.id, db=db
-    )
+    session_match = match_instruction_to_session(instruction, db=db)
 
     if session_match["status"] == "no_match":
         return {
@@ -152,14 +156,14 @@ def _with_message(payload: dict) -> dict:
 def chat(
     body: ChatInstruction,
     db: Annotated[Session, Depends(get_db)],
-    instructor: Annotated[User, Depends(require_instructor)],
+    _instructor: Annotated[User, Depends(require_instructor)],
 ) -> dict:
     """
     Resolves via _resolve_chat_instruction, then — if resolved — fully drains
     grade_session_batch (2.7) and returns one JSON response. No SSE here;
     see POST /chat/stream for the live-progress variant.
     """
-    resolution = _resolve_chat_instruction(body.instruction, instructor, db)
+    resolution = _resolve_chat_instruction(body.instruction, db)
     if not resolution.get("resolved"):
         return _with_message(resolution)
 
@@ -195,7 +199,7 @@ def chat(
 def chat_stream(
     body: ChatInstruction,
     db: Annotated[Session, Depends(get_db)],
-    instructor: Annotated[User, Depends(require_instructor)],
+    _instructor: Annotated[User, Depends(require_instructor)],
 ) -> StreamingResponse:
     """
     Same resolution as POST /chat, same access control, but every branch
@@ -217,7 +221,7 @@ def chat_stream(
     """
 
     def event_stream():
-        resolution = _resolve_chat_instruction(body.instruction, instructor, db)
+        resolution = _resolve_chat_instruction(body.instruction, db)
         if not resolution.get("resolved"):
             yield f"data: {json.dumps(_with_message(resolution))}\n\n"
             return

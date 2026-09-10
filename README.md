@@ -119,7 +119,11 @@ It speaks JSON-RPC over **stdio**, so it prints no banner, binds no port, and bl
 | Role | Email | Password |
 |---|---|---|
 | Instructor | `instructor@demo.com` | `instructor123` |
+| Instructor (multi-tenant testing) | `instructor2@demo.com` | `instructor2123` |
+| Instructor (multi-tenant testing) | `instructor3@demo.com` | `instructor3123` |
 | Student | `student@demo.com` | `student123` |
+
+`instructor2@demo.com` and `instructor3@demo.com` own their own separate sessions, distinct from `instructor@demo.com` — added to test cross-instructor behavior for real, since the app has never been exercised with more than one instructor account before.
 
 These are seeded automatically for local development. Replace `SECRET_KEY` with a securely generated value before any shared or hosted deployment.
 

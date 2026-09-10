@@ -28,7 +28,13 @@ logger = logging.getLogger(__name__)
 
 def match_session(instruction: str, instructor_id: int) -> dict:
     """
-    Resolve a free-text instruction to one of that instructor's sessions.
+    Resolve a free-text instruction to one of the existing sessions.
+
+    Matching is not scoped to *instructor_id* — instructor access is a
+    shared faculty workspace by design (see README), so this can resolve
+    to any instructor's session. *instructor_id* is kept as a required
+    argument purely for the caller's own audit trail (see the log line
+    below); it is not forwarded into the matcher.
 
     Returns Phase 3.1's result dict exactly as-is — one of:
       {"status": "matched", "session_id": int, "session_title": str,
@@ -43,7 +49,7 @@ def match_session(instruction: str, instructor_id: int) -> dict:
     """
     db = SessionLocal()
     try:
-        result = match_instruction_to_session(instruction, instructor_id, db)
+        result = match_instruction_to_session(instruction, db)
     finally:
         db.close()
 
@@ -61,7 +67,7 @@ def register(server: MCPServer) -> None:
         name="match_session",
         description=(
             "Resolve a free-text grading instruction (e.g. 'grade week 8 day 3') "
-            "to one of an instructor's existing sessions. Returns status "
+            "to one of the existing sessions, from any instructor. Returns status "
             "'matched' with the session id/title/confidence, 'ambiguous' with "
             "candidate sessions when more than one plausibly fits, or "
             "'no_match'. Ambiguous and no_match are normal outcomes — ask the "

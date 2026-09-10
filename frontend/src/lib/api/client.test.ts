@@ -110,6 +110,7 @@ describe("apiFetch — responses", () => {
           id: 3,
           title: "Week 1 Day 2",
           instructor_id: 1,
+          instructor_name: "Demo Instructor",
           created_at: "2026-09-01T10:00:00",
           assignment_uploads: [],
           unsolved_files: [],

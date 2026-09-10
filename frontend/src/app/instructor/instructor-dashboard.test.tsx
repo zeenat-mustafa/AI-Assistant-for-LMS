@@ -56,6 +56,7 @@ function session(overrides: Partial<SessionRead> = {}): SessionRead {
     id: 5,
     title: "Week 3 Day 1",
     instructor_id: 1,
+    instructor_name: "Demo Instructor",
     created_at: "2026-09-06T15:43:53.245057",
     assignment_uploads: [],
     unsolved_files: [],
@@ -78,7 +79,7 @@ describe("<InstructorDashboard /> — session list", () => {
   it("shows a loading state before the list arrives", () => {
     listSessionsMock.mockReturnValue(new Promise(() => {}));
     render(<InstructorDashboard />);
-    expect(screen.getByText(/loading your sessions/i)).toBeInTheDocument();
+    expect(screen.getByText(/loading sessions/i)).toBeInTheDocument();
   });
 
   it("renders sessions with their file counts, linking to the detail route", async () => {
@@ -114,20 +115,34 @@ describe("<InstructorDashboard /> — session list", () => {
     expect(within(second).getByText(/1 file$/)).toBeInTheDocument();
   });
 
-  it("hides sessions owned by another instructor", async () => {
-    // GET /sessions has no server-side owner filter, so the narrowing is ours.
+  it("shows sessions from every instructor, naming who created each one", async () => {
+    // Shared faculty workspace, deliberately: GET /sessions has no owner
+    // filter and the dashboard no longer applies one client-side either.
     listSessionsMock.mockResolvedValue({
       total: 2,
       items: [
-        session({ id: 5, title: "Mine", instructor_id: 1 }),
-        session({ id: 6, title: "Someone else's", instructor_id: 99 }),
+        session({
+          id: 5,
+          title: "Mine",
+          instructor_id: 1,
+          instructor_name: "Demo Instructor",
+        }),
+        session({
+          id: 6,
+          title: "Someone else's",
+          instructor_id: 99,
+          instructor_name: "Demo Instructor 2",
+        }),
       ],
     });
 
     render(<InstructorDashboard />);
 
-    expect(await screen.findByText("Mine")).toBeInTheDocument();
-    expect(screen.queryByText("Someone else's")).not.toBeInTheDocument();
+    const mine = await screen.findByRole("link", { name: /mine/i });
+    expect(within(mine).getByText(/Demo Instructor ·/)).toBeInTheDocument();
+
+    const someoneElses = screen.getByRole("link", { name: /someone else's/i });
+    expect(within(someoneElses).getByText(/Demo Instructor 2 ·/)).toBeInTheDocument();
   });
 
   it("surfaces a load failure instead of pretending the list is empty", async () => {

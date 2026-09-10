@@ -103,7 +103,8 @@ Sub-feature 5.5 (student session list + assignment downloads)
   check. This is what makes the student pages work at all, and it is
   pre-existing backend behaviour, but it means assignment files are
   readable by every authenticated account, not only intended recipients.
-  Recorded alongside the 5.3 entry on missing ownership checks.
+  Student-facing only — unaffected by the instructor-to-instructor
+  shared-workspace decision recorded under Sub-feature 5.3 below.
 
 Sub-feature 5.4 (instructor grades roster + embedded grading chat)
 ------------------------------------------------------------------------
@@ -170,43 +171,39 @@ Sub-feature 5.4 (instructor grades roster + embedded grading chat)
 
 Sub-feature 5.3 (instructor session + assignment file management)
 ------------------------------------------------------------------------
-- GET /sessions HAS NO OWNER FILTER, SO THE OWNERSHIP NARROWING IS
-  CLIENT-SIDE AND BREAKS PAST ONE PAGE. The endpoint is literally
-  "List all sessions" (backend/app/routers/sessions.py::list_sessions):
-  it takes no instructor_id, applies no filter, and is gated on
-  get_current_user rather than require_instructor — so any authenticated
-  user, student included, can read every instructor's session list.
+- INSTRUCTOR ACCESS IS A SHARED FACULTY WORKSPACE — INTENTIONAL DESIGN,
+  NOT A GAP (decided 2026-09-10, superseding the two entries that used
+  to sit here). Every instructor sees, reads, edits, and grades every
+  session, regardless of who created it: a shared faculty workspace, not
+  per-instructor isolation. Reason: this is a collaborative workspace for
+  a teaching team, not a multi-tenant product where instructors need
+  walling off from each other.
 
-  The instructor dashboard therefore fetches one page and filters on
-  `instructor_id === user.id` in the browser
-  (frontend/src/app/instructor/instructor-dashboard.tsx::loadOwnSessions).
+  This was already most of the actual backend behaviour before the
+  decision was made explicit: GET /sessions, GET /sessions/{id},
+  DELETE /sessions/{id}, and every assignment/submission/grade route were
+  already gated on role only (require_instructor / get_current_user),
+  never on instructor_id ownership. The one place that genuinely DID
+  restrict by the calling instructor was session_matcher.py's
+  match_instruction_to_session, which used to filter candidate sessions
+  to `instructor_id == <caller>` — so /chat and /chat/stream instructions
+  could only ever resolve to an instructor's own sessions. That filter is
+  now removed; matching considers every session regardless of caller.
 
-  Practical effect: the page requests limit=200, the backend's maximum.
-  Below 200 TOTAL sessions across ALL instructors the filtered list is
-  correct. Above that, sessions belonging to this instructor can sit
-  beyond the fetched page and silently vanish from their dashboard —
-  filtering a page after the fact cannot see what the page did not
-  contain. `SessionList.total` is the unfiltered count for every
-  instructor, so it is deliberately never displayed anywhere in the UI.
+  frontend/src/app/instructor/instructor-dashboard.tsx no longer filters
+  the session list by `instructor_id === user.id` either (was
+  `loadOwnSessions`, now `loadAllSessions`) — the dashboard is titled
+  "All sessions" and shows each session's `instructor_name` (added to
+  SessionRead, display-only) so who created what stays visible without
+  gating who can act on it.
 
-  This also means the narrowing is cosmetic, not access control: another
-  instructor's session is still readable through the API, and typing its
-  id into /instructor/sessions/<id> will load it (see the next entry).
+  `instructor_id` is kept on the data model and on SessionRead purely for
+  that "created by" display — never removed, never used to gate access.
 
-  DECISION (deferred, deliberately): not fixed in Phase 5, because the
-  fix belongs in the backend (an instructor_id filter on list_sessions,
-  and an ownership check on the session detail/delete routes), and Phase
-  5's prompts scope the backend as off-limits. Only one instructor is
-  seeded, so the demo never exercises it. Revisit if a second instructor
-  account is ever added, or in Phase 6 if multi-instructor is demoed.
-
-- NO OWNERSHIP CHECKS ON SESSION DETAIL OR DELETE. GET /sessions/{id}
-  requires only get_current_user, and DELETE /sessions/{id} requires only
-  require_instructor — neither verifies the session belongs to the
-  caller. So any instructor can read or delete any instructor's session,
-  and any student can read one. Pre-existing backend behaviour, unchanged
-  and unmasked by Phase 5; recorded here because 5.3 is the first thing
-  to put a UI on those routes.
+  Unaffected: student-facing access control. Students still only see
+  their own submissions/grades (student_id-scoped routes untouched); see
+  the entry above this one for the pre-existing, separate, unrelated gap
+  where students can read any session's detail/assignment files.
 
 - ASSIGNMENT UPLOAD IS ATOMIC PER BATCH, AND THE UI SAYS SO RATHER THAN
   RETRYING. The backend checks every filename in a request against the

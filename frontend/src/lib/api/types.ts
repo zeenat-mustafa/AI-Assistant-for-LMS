@@ -102,6 +102,12 @@ export interface SessionRead {
   id: number;
   title: string;
   instructor_id: number | null;
+  /**
+   * Display only -- instructor access is a shared faculty workspace, so
+   * this is never used to gate visibility, only to show who created a
+   * session.
+   */
+  instructor_name: string | null;
   created_at: string;
   /**
    * What instructors actually uploaded, one row per upload event. The ONLY

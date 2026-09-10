@@ -19,6 +19,7 @@ FastAPI (Python) + SQLite/SQLAlchemy + Alembic migrations + JWT/bcrypt auth + lo
 - Any schema change MUST go through an Alembic migration (`alembic revision --autogenerate`) — never rely on `create_all()` for an existing non-empty DB; it only creates missing tables, never alters existing ones. `create_all()` is still fine for a brand-new empty dev DB.
 - Evaluator must verify claimed execution against real `execution_count`/output evidence — never credit a criterion claiming a cell "ran/executed/produced X" without real evidence.
 - Evaluator must penalize substituting a custom implementation for an explicitly NAMED required tool/library (not just a goal/outcome) — cap at ~20-30% of that criterion's points, excluding failed/abandoned install attempts from counting as partial use.
+- Instructor access is a shared faculty workspace, not per-instructor isolation (decided 2026-09-10): every instructor sees/reads/edits/grades every session regardless of who created it. `instructor_id` stays on the data model purely for "created by" display, never for gating access. Student-facing access control is unaffected — students still only see their own submissions/grades. Full details: `phase5-known-gaps-record.txt`.
 
 ## Current status (update this section as phases complete)
 - **Phase 1 (Foundation): COMPLETE.** Auth, session CRUD, assignment/submission upload, grade-report endpoints.

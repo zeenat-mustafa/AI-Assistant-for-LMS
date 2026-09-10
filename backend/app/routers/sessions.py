@@ -34,6 +34,7 @@ def _session_read(session: LMSSession) -> SessionRead:
         id=session.id,
         title=session.title,
         instructor_id=session.instructor_id,
+        instructor_name=session.instructor.name if session.instructor else None,
         created_at=session.created_at,
         assignment_uploads=[
             AssignmentUploadRead.from_orm_model(u) for u in session.assignment_uploads

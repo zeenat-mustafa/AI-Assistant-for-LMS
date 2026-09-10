@@ -14,7 +14,8 @@ silently diverge in how they resolve the same instruction.
 Cases covered
 -------------
 1. Tool registered, with typed required arguments in its schema.
-2. Delegates to match_instruction_to_session with the caller's arguments.
+2. Delegates to match_instruction_to_session with the instruction, WITHOUT
+   forwarding instructor_id (matching is shared across instructors now).
 3. Passes a real DB session, and closes it afterwards.
 4-6. Returns "matched" / "ambiguous" / "no_match" dicts byte-for-byte.
 7. A DB session is closed even when the matcher raises.
@@ -70,7 +71,13 @@ async def test_match_session_registered_with_expected_schema():
 # 2-3. Delegation
 # ---------------------------------------------------------------------------
 
-def test_delegates_to_session_matcher_with_caller_arguments():
+def test_delegates_to_session_matcher_without_forwarding_instructor_id():
+    """
+    instructor_id stays a required argument on the MCP tool itself (kept
+    for the caller's own audit trail -- see its docstring), but is no
+    longer forwarded into match_instruction_to_session: matching is a
+    shared faculty workspace now, not scoped to a calling instructor.
+    """
     with patch(
         "app.mcp.tools.session_tools.match_instruction_to_session",
         return_value=_MATCHED,
@@ -80,8 +87,8 @@ def test_delegates_to_session_matcher_with_caller_arguments():
     mock_match.assert_called_once()
     args, _kwargs = mock_match.call_args
     assert args[0] == "grade week 2 day 1"
-    assert args[1] == 1
-    assert args[2] is not None, "a DB session should be passed through"
+    assert args[1] is not None, "a DB session should be passed through"
+    assert len(args) == 2, "instructor_id must not be forwarded to the matcher"
 
 
 def test_opens_and_closes_a_db_session():
@@ -94,7 +101,7 @@ def test_opens_and_closes_a_db_session():
     ) as mock_match:
         match_session("grade week 2 day 1", 1)
 
-    assert mock_match.call_args[0][2] is fake_db
+    assert mock_match.call_args[0][1] is fake_db
     fake_db.close.assert_called_once()
 
 
