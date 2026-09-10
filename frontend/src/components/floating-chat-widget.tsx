@@ -1,59 +1,46 @@
 "use client";
 
 /**
- * Embedded grading chat (5.4, Step 2).
+ * Floating grading-chat widget (Phase 5 post-fix, Feature 6).
  *
- * Scoping — the decision this component exists around
- * ---------------------------------------------------
- * POST /chat/stream accepts exactly one field, `{"instruction": string}`.
- * There is no session_id: Phase 3 resolves the session by matching the
- * instruction TEXT (session_matcher.match_instruction_to_session). So an
- * embedded panel cannot say "this session" except through what the
- * instructor types.
+ * Replaces the old per-session embedded panel (formerly
+ * app/instructor/sessions/[id]/grading-chat.tsx). Mounted once in
+ * app/instructor/layout.tsx so it is available on every instructor page
+ * without remounting on navigation between them.
  *
- * Signed off: PREFILL, DON'T REWRITE. The input starts pre-filled with this
- * session's exact title and is sent verbatim — nothing is injected behind
- * the instructor's back. If they edit the session name, that is an explicit
- * choice and Phase 3's matcher receives one coherent instruction, so its
- * deliberate never-guess-on-ambiguity behaviour is left intact.
+ * No session context, by design
+ * ------------------------------
+ * POST /chat/stream accepts exactly one field, `{"instruction": string}` --
+ * there is no session_id and no server-side conversation memory. The old
+ * panel lived inside one session's page and could therefore prefill the
+ * input with that session's title. This widget has no page to anchor to
+ * (it floats over the dashboard just as much as any session page), so there
+ * is nothing to prefill from and nothing to auto-fill -- the instructor must
+ * always name the session in what they type, exactly as if editing the old
+ * prefill away by hand. The "did this run target the page I'm on" tracking
+ * (summaryNamesSession/ranElsewhere/onGraded) went away for the same reason:
+ * there is no longer a "this page's session" to compare against.
  *
- * Cross-session detection — and its one real limitation
- * -----------------------------------------------------
- * A RESOLVED run streams only grade_session_batch's own events; unlike the
- * early-exit outcomes, none of them carries a session_id. The only signal
- * that a run targeted a different session is that 3.5's summary message
- * interpolates the session title verbatim ("...in {session_title}."). This
- * component therefore matches on `in {title}`. If that wording ever changes
- * the check fails toward showing the warning and skipping the refresh, which
- * is the safe direction — never toward silently claiming a refresh happened.
+ * No persistence
+ * ---------------
+ * Chat history lives only in useState and resets whenever the widget
+ * unmounts (a full page reload) or is deliberately cleared on close, per the
+ * locked "no persistent history" decision. Nothing here touches
+ * localStorage/sessionStorage.
  *
- * Message rendering — as-is, with one backstop
- * --------------------------------------------
- * The outcome and summary messages (`turn.outcome.message`, `turn.summary.message`)
- * come from the backend and are rendered verbatim — nothing here reformats,
- * truncates or parses them; the only string inspection done on them is
- * `summaryNamesSession` above, which routes and never edits what is shown.
- *
- * The per-file `checking`/`graded`/`failed` lines are the one exception: the
- * backend has no message text for these (grade_session_batch only carries
- * raw fields — student_id/student_name/filename/score/error), so `EventLine`
- * below builds "Checking X for Y…" etc. itself from those fields.
- *
- * Separately, `safeChatText` passes a normal backend message through
- * untouched and swaps in a generic line only when the text looks like raw
- * internals (see lib/chat-safety.ts). The backend already sanitises the
- * known all-providers-failed case; this catches anything that slips past it.
+ * Everything else -- SSE consumption via streamChat, progressive
+ * checking/graded/failed rendering, the five early-exit outcomes, and the
+ * raw-error backstop via safeChatText -- is carried over unchanged from the
+ * old panel.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, isChatEarlyExit, streamChat } from "@/lib/api";
 import type { ChatEarlyExit, GradingEvent, GradingSummaryEvent } from "@/lib/api";
-import { Panel, SmallButton, SubmitButton } from "@/components/ui";
-import {
-  GENERIC_FAILURE_FALLBACK,
-  safeChatText,
-} from "@/lib/chat-safety";
+import { useAuth } from "@/lib/auth/auth-context";
+import { SubmitButton } from "@/components/ui";
+import { GENERIC_FAILURE_FALLBACK, safeChatText } from "@/lib/chat-safety";
 
 interface Turn {
   id: number;
@@ -63,44 +50,53 @@ interface Turn {
   /** One of the five non-graded outcomes; a normal reply, not an error. */
   outcome: ChatEarlyExit | null;
   summary: GradingSummaryEvent | null;
-  /** Transport/API failure — this one IS an error. */
+  /** Transport/API failure -- this one IS an error. */
   error: string | null;
   streaming: boolean;
-  /** True when the summary names a session other than this page's. */
-  ranElsewhere: boolean;
-}
-
-/** The instruction the input is pre-filled with; also the reset target. */
-export function defaultInstruction(sessionTitle: string): string {
-  return `grade ${sessionTitle} `;
 }
 
 /**
- * Did this summary's conversational message name the session we are on?
- * See the module docstring for why this is a string check.
+ * Floating icon + expandable panel, mounted once for every instructor page.
+ * Renders nothing unless the signed-in user is an instructor -- this is a
+ * defensive check on top of only ever being mounted under app/instructor/,
+ * so it can never flash during an anonymous/wrong-role redirect.
  */
-export function summaryNamesSession(message: string | undefined, sessionTitle: string): boolean {
-  if (!message) return false;
-  return message.includes(`in ${sessionTitle}`);
+export function FloatingChatWidget() {
+  const { user, status } = useAuth();
+  const [isOpen, setIsOpen] = useState(false);
+
+  if (status !== "authenticated" || user?.role !== "instructor") return null;
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50">
+      {isOpen ? (
+        <ChatPanel onClose={() => setIsOpen(false)} />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setIsOpen(true)}
+          aria-label="Open grading chat"
+          className="flex h-14 w-14 items-center justify-center rounded-full bg-slate-900 text-white shadow-lg transition hover:bg-slate-700"
+        >
+          <span aria-hidden className="text-2xl">
+            💬
+          </span>
+        </button>
+      )}
+    </div>
+  );
 }
 
-export function GradingChat({
-  sessionTitle,
-  onGraded,
-}: {
-  sessionTitle: string;
-  /** Called only when a run that targeted THIS session finishes. */
-  onGraded: () => void;
-}) {
+function ChatPanel({ onClose }: { onClose: () => void }) {
   const [turns, setTurns] = useState<Turn[]>([]);
-  const [instruction, setInstruction] = useState(() => defaultInstruction(sessionTitle));
+  const [instruction, setInstruction] = useState("");
   const [streaming, setStreaming] = useState(false);
 
   const nextId = useRef(1);
   const abortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
-  // Abandon an in-flight stream if the instructor navigates away mid-run.
+  // Abandon an in-flight stream if the widget is closed mid-run.
   useEffect(() => {
     return () => abortRef.current?.abort();
   }, []);
@@ -133,32 +129,28 @@ export function GradingChat({
         summary: null,
         error: null,
         streaming: true,
-        ranElsewhere: false,
       },
     ]);
+    setInstruction("");
     setStreaming(true);
 
     const controller = new AbortController();
     abortRef.current = controller;
 
-    let graded = false;
-    let ranElsewhere = false;
-
     try {
       for await (const event of streamChat(text, { signal: controller.signal })) {
         if (isChatEarlyExit(event)) {
           // no_session_match / ambiguous_session / student_not_found /
-          // ambiguous_student / unsupported_filter — all normal replies.
+          // ambiguous_student / unsupported_filter / unrecognized_instruction
+          // -- all normal replies.
           patch(id, { outcome: event });
           continue;
         }
         if (event.event === "summary") {
-          ranElsewhere = !summaryNamesSession(event.message, sessionTitle);
-          graded = true;
-          patch(id, { summary: event, ranElsewhere });
+          patch(id, { summary: event });
           continue;
         }
-        // checking / graded / failed — appended one at a time so the list
+        // checking / graded / failed -- appended one at a time so the list
         // grows as the backend works, rather than appearing all at once.
         setTurns((current) =>
           current.map((turn) =>
@@ -180,58 +172,63 @@ export function GradingChat({
       setStreaming(false);
       abortRef.current = null;
     }
-
-    // Only refresh when the run actually touched this session's grades.
-    if (graded && !ranElsewhere) onGraded();
   }
 
   return (
-    <Panel
-      title="Grading chat"
-      description="Ask in plain language. The session name has to be in the instruction — the backend resolves it from your words, not from this page."
-    >
+    <section className="flex h-[32rem] w-96 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+      <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900">Grading chat</h2>
+          <p className="text-xs text-slate-500">
+            Ask me to grade a session, e.g. &ldquo;grade Week 3 Day 1&rdquo;.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close grading chat"
+          className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+        >
+          <span aria-hidden className="text-lg leading-none">
+            ✕
+          </span>
+        </button>
+      </header>
+
       <div
         ref={logRef}
-        className="mb-4 max-h-96 space-y-4 overflow-y-auto"
+        className="flex-1 space-y-4 overflow-y-auto px-4 py-3"
         aria-live="polite"
         aria-busy={streaming}
       >
         {turns.length === 0 ? (
           <p className="py-2 text-sm text-slate-500">
-            Try <code className="rounded bg-slate-100 px-1">grade {sessionTitle}</code> or{" "}
-            <code className="rounded bg-slate-100 px-1">grade {sessionTitle} for Fiza</code>.
+            Try <code className="rounded bg-slate-100 px-1">grade Week 3 Day 1</code> or{" "}
+            <code className="rounded bg-slate-100 px-1">grade Week 3 Day 1 for Fiza</code>.
           </p>
         ) : (
           turns.map((turn) => <TurnView key={turn.id} turn={turn} />)
         )}
       </div>
 
-      <form onSubmit={handleSubmit} noValidate>
-        <label htmlFor="chat-instruction" className="mb-1 block text-sm font-medium text-slate-700">
+      <form onSubmit={handleSubmit} noValidate className="border-t border-slate-200 p-3">
+        <label htmlFor="floating-chat-instruction" className="sr-only">
           Instruction
         </label>
         <input
-          id="chat-instruction"
+          id="floating-chat-instruction"
           name="instruction"
           value={instruction}
           onChange={(e) => setInstruction(e.target.value)}
           disabled={streaming}
+          placeholder="Ask me to grade a session, e.g. 'grade Week 3 Day 1'"
           className="mb-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-slate-400 disabled:bg-slate-100"
         />
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <SmallButton
-            onClick={() => setInstruction(defaultInstruction(sessionTitle))}
-            disabled={streaming}
-          >
-            Reset to this session
-          </SmallButton>
-          <span className="text-xs text-slate-500">Sent exactly as written.</span>
-        </div>
         <SubmitButton pending={streaming} pendingLabel="Grading…">
           Send
         </SubmitButton>
       </form>
-    </Panel>
+    </section>
   );
 }
 
@@ -290,12 +287,6 @@ function TurnView({ turn }: { turn: Turn }) {
                 ))}
               </ul>
             ) : null}
-            {turn.ranElsewhere ? (
-              <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
-                That instruction resolved to a different session, so this page&apos;s roster
-                is unchanged.
-              </p>
-            ) : null}
           </div>
         ) : null}
       </div>
@@ -337,8 +328,9 @@ function EventLine({ event }: { event: GradingEvent }) {
 }
 
 /**
- * The five non-graded outcomes. Rendered as ordinary replies — these are
- * conversational results ("which student did you mean?"), not failures.
+ * The five non-graded outcomes (plus unrecognized_instruction). Rendered as
+ * ordinary replies -- these are conversational results ("which student did
+ * you mean?"), not failures.
  */
 function OutcomeView({ outcome }: { outcome: ChatEarlyExit }) {
   return (
