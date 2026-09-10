@@ -17,11 +17,13 @@
  * therefore never asked to guess: if it is rendering, the file is graded, and
  * "0 / 10" means the student scored zero.
  *
- * Content is unchanged from what these panels showed before — the graded date
- * and the instructor-facing feedback text — it is simply hidden until asked
- * for. `GradeRead.rationale`, the structured criterion breakdown, is still
- * deliberately not rendered anywhere: it remains reserved for the
- * Extended-Goals "why this grade" chatbot.
+ * Content is unchanged from what these panels showed before except for one
+ * thing (bugfix-structured-rationale-display): when the backend has a
+ * structured per-criterion breakdown (`GradeRead.rationale`), that renders as
+ * the primary detail -- one block per criterion with its name, "X / Y", and
+ * explanation -- instead of the flat `feedback_text` paragraph. `feedback_text`
+ * is the fallback, shown only when `rationale` is missing or empty, exactly as
+ * it rendered before this fix.
  */
 
 import { useId, useState } from "react";
@@ -78,7 +80,40 @@ export function GradeFileRow({
         <p className="mt-0.5 text-xs text-slate-500">
           Graded {formatDate(grade.graded_at)}
         </p>
-        {grade.feedback_text ? (
+        {grade.rationale && grade.rationale.length > 0 ? (
+          <ul className={dense ? "mt-1 space-y-1.5" : "mt-2 space-y-2"}>
+            {grade.rationale.map((entry, index) => (
+              <li
+                key={index}
+                className="rounded-md border border-slate-200 bg-slate-50 p-2"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <span
+                    className={
+                      dense
+                        ? "text-xs font-medium text-slate-800"
+                        : "text-sm font-medium text-slate-800"
+                    }
+                  >
+                    {entry.criterion}
+                  </span>
+                  <span className="shrink-0 text-xs tabular-nums text-slate-600">
+                    {entry.points_awarded} / {entry.points_possible}
+                  </span>
+                </div>
+                <p
+                  className={
+                    dense
+                      ? "mt-1 text-xs text-slate-600"
+                      : "mt-1 text-sm text-slate-700"
+                  }
+                >
+                  {entry.explanation}
+                </p>
+              </li>
+            ))}
+          </ul>
+        ) : grade.feedback_text ? (
           <p
             className={
               dense

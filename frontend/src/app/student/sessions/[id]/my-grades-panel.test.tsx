@@ -148,7 +148,9 @@ describe("<MyGradesPanel />", () => {
     expect(screen.getByText(/1 of 3 assignment files graded so far/i)).toBeInTheDocument();
   });
 
-  it("never renders the structured rationale, even when the API returns it", () => {
+  it("renders the structured rationale as the primary detail when the API returns it", async () => {
+    // bugfix-structured-rationale-display: rationale is now the primary
+    // per-file detail; feedback_text is only shown when rationale is absent.
     render(
       <MyGradesPanel
         grades={summary({
@@ -171,11 +173,40 @@ describe("<MyGradesPanel />", () => {
       />,
     );
 
-    // The human-readable feedback is shown...
+    await userEvent.click(screen.getByRole("button", { name: /Numpy_and_Plotting/ }));
+
+    expect(screen.getByText("Array reshaping")).toBeInTheDocument();
+    expect(screen.getByText("2.5 / 3")).toBeInTheDocument();
+    expect(screen.getByText("INTERNAL-RATIONALE-MARKER")).toBeInTheDocument();
+    // Rationale takes over -- the flat feedback text is not also shown.
+    expect(screen.queryByText(/strong array work/i)).not.toBeInTheDocument();
+    // No raw internal field names leak into the UI as literal text.
+    expect(document.body.textContent).not.toContain("points_awarded");
+    expect(document.body.textContent).not.toContain("points_possible");
+  });
+
+  it("falls back to feedback_text when rationale is null", () => {
+    render(
+      <MyGradesPanel
+        grades={summary({ per_file: [grade({ rationale: null })] })}
+        error={null}
+        submission={SUBMISSION}
+        totalAssignmentFiles={1}
+      />,
+    );
     expect(screen.getByText(/strong array work/i)).toBeInTheDocument();
-    // ...but nothing from rationale_json is.
-    expect(screen.queryByText(/INTERNAL-RATIONALE-MARKER/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Array reshaping/)).not.toBeInTheDocument();
+  });
+
+  it("falls back to feedback_text when rationale is an empty array", () => {
+    render(
+      <MyGradesPanel
+        grades={summary({ per_file: [grade({ rationale: [] })] })}
+        error={null}
+        submission={SUBMISSION}
+        totalAssignmentFiles={1}
+      />,
+    );
+    expect(screen.getByText(/strong array work/i)).toBeInTheDocument();
   });
 
   it("surfaces a load failure", () => {
