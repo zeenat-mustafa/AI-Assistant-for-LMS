@@ -146,20 +146,24 @@ describe("<GradesRoster />", () => {
     expect(screen.queryByText("a.ipynb")).not.toBeInTheDocument();
   });
 
-  it("states the zero-submission limitation on both the empty and populated table", () => {
+  it("no longer shows the zero-submission footnote on either the empty or populated table", () => {
+    // bugfix-roster-footnote: the limitation is real (see
+    // phase5-known-gaps-record.txt) but the on-screen footnote describing it
+    // was removed as UI cleanup -- this pins its absence in both states it
+    // used to appear in.
     const { rerender } = render(
       <GradesRoster report={report([])} error={null} totalAssignmentFiles={4} />,
     );
     expect(
-      screen.getByText(/only students with at least one submission appear here/i),
-    ).toBeInTheDocument();
+      screen.queryByText(/only students with at least one submission appear here/i),
+    ).not.toBeInTheDocument();
 
     rerender(
       <GradesRoster report={report([student()])} error={null} totalAssignmentFiles={4} />,
     );
     expect(
-      screen.getByText(/only students with at least one submission appear here/i),
-    ).toBeInTheDocument();
+      screen.queryByText(/only students with at least one submission appear here/i),
+    ).not.toBeInTheDocument();
   });
 
   it("uses singular wording for a one-file session", () => {

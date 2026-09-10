@@ -10,8 +10,9 @@
  *    has submitted NOTHING never appears at all. There is no student-listing
  *    endpoint anywhere in the API to cross-reference against (the whole
  *    surface is 21 routes; auth.py has only login/me/register), so the table
- *    genuinely cannot be completed client-side. It therefore says so, rather
- *    than presenting itself as the full class list.
+ *    genuinely cannot be completed client-side. This is a real, permanent
+ *    limitation -- documented in phase5-known-gaps-record.txt rather than as
+ *    an on-screen footnote (bugfix-roster-footnote removed the latter).
  *
  * 2. `combined_score` is null ONLY when the session has no assignment files.
  *    A student who submitted but has nothing graded yet gets 0.0 -- which
@@ -46,41 +47,19 @@ export function GradesRoster({
       {report === null && !error ? (
         <Loading>Loading grades…</Loading>
       ) : report && report.students.length === 0 ? (
-        <>
-          <EmptyState>No submissions for this session yet.</EmptyState>
-          <RosterCaveat />
-        </>
+        <EmptyState>No submissions for this session yet.</EmptyState>
       ) : report ? (
-        <>
-          <ul className="divide-y divide-slate-200">
-            {report.students.map((student) => (
-              <StudentRow
-                key={student.student_id}
-                student={student}
-                totalAssignmentFiles={totalAssignmentFiles}
-              />
-            ))}
-          </ul>
-          <RosterCaveat />
-        </>
+        <ul className="divide-y divide-slate-200">
+          {report.students.map((student) => (
+            <StudentRow
+              key={student.student_id}
+              student={student}
+              totalAssignmentFiles={totalAssignmentFiles}
+            />
+          ))}
+        </ul>
       ) : null}
     </Panel>
-  );
-}
-
-/**
- * Surfaces the zero-submission gap in the UI instead of letting the table
- * imply it is the whole class. Deliberately not a fix -- the gap is in the
- * backend and is out of scope here.
- */
-function RosterCaveat() {
-  return (
-    <p className="mt-4 border-t border-slate-200 pt-3 text-xs text-slate-500">
-      Only students with at least one submission appear here. The API builds
-      this report from submissions and exposes no class roster, so students who
-      have submitted nothing cannot be listed — see{" "}
-      <code className="rounded bg-slate-100 px-1">phase5-known-gaps-record.txt</code>.
-    </p>
   );
 }
 
