@@ -2,6 +2,7 @@
 # before create_all() is called in main.py.
 from app.models.user import User
 from app.models.session import LMSSession
+from app.models.assignment_upload import AssignmentUpload
 from app.models.unsolved_file import UnsolvedFile
 from app.models.resource_file import ResourceFile
 from app.models.submission import Submission
@@ -11,6 +12,7 @@ from app.models.grade import Grade
 __all__ = [
     "User",
     "LMSSession",
+    "AssignmentUpload",
     "UnsolvedFile",
     "ResourceFile",
     "Submission",

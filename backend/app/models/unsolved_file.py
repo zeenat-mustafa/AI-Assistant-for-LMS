@@ -22,6 +22,14 @@ class UnsolvedFile(Base):
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     # Path relative to storage_root, e.g. "{session_id}/assignments/hw1.ipynb"
     file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    # The AssignmentUpload row this notebook was extracted from. NULL only for
+    # rows created before bugfix-original-upload-preservation existed — every
+    # notebook created going forward always has one, set in the same request
+    # that creates it. Purely a provenance/cascade-cleanup link: nothing in the
+    # grading pipeline (file_matcher, evaluator, rubric, MCP tools) reads it.
+    source_upload_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assignment_uploads.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     # Extracted instruction/markdown/docstring text — parsed from the notebook
     # cells at upload time and stored for rubric generation + file matching.
     parsed_requirements_text: Mapped[str | None] = mapped_column(Text, nullable=True)

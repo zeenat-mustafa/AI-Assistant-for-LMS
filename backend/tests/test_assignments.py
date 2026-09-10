@@ -1,10 +1,17 @@
 """
-Tests for the updated POST /api/v1/sessions/{session_id}/assignments endpoint.
+Tests for POST/GET/DELETE /api/v1/sessions/{session_id}/assignments.
 
-Phase 1/2 fix: the endpoint now accepts one .ipynb, multiple .ipynb files in
-a single multipart request, or a .zip archive (recursively extracted via the
-same extract_notebooks_from_zip already used for student submissions).
-The response is always list[UnsolvedFileRead].
+bugfix-original-upload-preservation: every upload now creates exactly one
+AssignmentUpload row per file submitted — a zip is one row with its own
+filename, never a list of what's inside it. The response is
+list[AssignmentUploadRead]; downloading an upload returns the original bytes
+byte-for-byte; deleting one cascades to whatever it produced internally.
+
+Notebook/resource extraction for the grading pipeline is UNCHANGED — a zip
+still explodes into UnsolvedFile (gradeable) and ResourceFile (download-only,
+historical) rows exactly as before. Those rows are simply no longer
+independently listed, downloaded, or deleted; tests that verify extraction
+itself check the DB directly instead of the old per-piece API responses.
 
 Run with:
     cd backend
@@ -12,23 +19,35 @@ Run with:
 
 Cases covered
 ─────────────
-Upload behaviour
-  1.  Single .ipynb → list with exactly one UnsolvedFileRead (backward compat)
-  2.  Multiple .ipynb files in one call → list with all records created
-  3.  .zip with notebooks at archive root → all extracted and returned
-  4.  .zip with notebooks 2+ folders deep → recursive extraction
-  5.  .zip with mixed files → notebooks (UnsolvedFile) + resources (ResourceFile) (Fix 2)
-  6.  .zip with only resources → accepted; only junk → 422 (Fix 2)
-  7.  Duplicate filename within session → 409 (whole request rejected atomically)
-  8.  Invalid extension (.py) → 422
-  9.  Student cannot upload → 403
-  10. Unauthenticated request → 401
-  11. Nonexistent session → 404
+Upload — any file type, one row per upload event
+  1.  Single .ipynb → one AssignmentUploadRead; one UnsolvedFile row too
+  2.  Multiple files in one call → one AssignmentUploadRead per file
+  3.  .zip with notebooks at archive root → ONE upload row; N UnsolvedFile rows
+  4.  .zip with notebooks 2+ folders deep → recursive extraction unaffected
+  5.  .zip with mixed files → ONE upload row; notebooks + resources extracted internally
+  6.  .zip with only resources (no notebooks) → accepted, ONE upload row
+  7.  .zip with NOTHING usable inside → still accepted as one upload row (no 422 anymore)
+  8.  A bare non-notebook, non-zip file (e.g. .pdf) → accepted directly, no extraction
+  9.  Duplicate filename within session → 409 (whole request rejected atomically)
+  10. Student cannot upload → 403
+  11. Unauthenticated request → 401
+  12. Nonexistent session → 404
 
-DB / response correctness
-  12. Each created UnsolvedFile row has parsed_requirements_text set
-  13. created_count rows appear in DB after a multi-file upload
-  14. Response list order and field values match what's in the DB
+Grading-pipeline preservation (Option (a)'s whole point)
+  13. Resources still excluded from the assignment-count denominator
+  14. Resources still never enter the file-matcher's candidate pool
+  15. Duplicate guard still spans notebooks/resources/uploads together
+  16. parsed_requirements_text still set per extracted notebook
+
+Display / download / delete — the new contract
+  17. GET lists AssignmentUploadRead, not extracted pieces
+  18. Download returns the original bytes exactly, byte-for-byte
+  19. SessionRead exposes assignment_uploads (display) separately from
+      unsolved_files/resource_files (internal-only counts)
+  20. DELETE removes the upload AND cascades to its extracted notebooks/
+      resources, in the DB and on disk
+  21. DELETE 404s for a nonexistent id or one from a different session
+  22. Access control on download/delete (401/403)
 """
 
 import io
@@ -39,12 +58,13 @@ from unittest.mock import patch
 import nbformat
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
+from app.models.assignment_upload import AssignmentUpload
 from app.models.session import LMSSession
 from app.models.unsolved_file import UnsolvedFile
 from app.models.resource_file import ResourceFile
@@ -86,6 +106,11 @@ async def _mock_save(session_id: int, filename: str, data: bytes) -> str:
     return f"{session_id}/assignments/{filename}"
 
 
+# Mock for save_original_upload_file — same idea, separate directory.
+async def _mock_save_original(session_id: int, filename: str, data: bytes) -> str:
+    return f"{session_id}/assignments/originals/{filename}"
+
+
 def _post(client, token, session_id, *file_tuples):
     """
     Convenience: POST multipart upload to the assignments endpoint.
@@ -102,13 +127,29 @@ def _post(client, token, session_id, *file_tuples):
     )
 
 
+def _post_mocked(client, token, session_id, *file_tuples):
+    """Same as _post but with both save helpers mocked (no real disk I/O)."""
+    with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save), \
+         patch("app.routers.assignments.save_original_upload_file", side_effect=_mock_save_original):
+        return _post(client, token, session_id, *file_tuples)
+
+
 # ===========================================================================
 # Fixtures
 # ===========================================================================
 
 @pytest.fixture()
 def db():
-    """In-memory SQLite database wired to the real ORM models."""
+    """
+    In-memory SQLite database wired to the real ORM models.
+
+    Mirrors app/database.py's own connect-time pragma: SQLite does not
+    enforce foreign keys (and therefore never runs an ondelete=CASCADE) by
+    default, unlike Postgres/MySQL. The real engine turns this on for every
+    connection; without doing the same here, this fixture would silently
+    under-test any FK cascade (e.g. deleting an AssignmentUpload cascading
+    to the UnsolvedFile/ResourceFile rows it produced).
+    """
     import app.models  # noqa: F401
 
     engine = create_engine(
@@ -116,6 +157,13 @@ def db():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+
+    @event.listens_for(engine, "connect")
+    def _enable_foreign_keys(dbapi_conn, _connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     Base.metadata.create_all(engine)
     TestingSession = sessionmaker(bind=engine)
     session = TestingSession()
@@ -162,97 +210,82 @@ def client(db):
 
 
 # ===========================================================================
-# Tests
+# Upload — any file type, one row per upload event
 # ===========================================================================
 
 class TestUploadAssignment:
 
-    # ── 1. Single .ipynb (backward compatibility) ─────────────────────────────
+    # ── 1. Single .ipynb ───────────────────────────────────────────────────────
 
-    def test_single_ipynb_returns_list_with_one_item(self, client, db):
-        """
-        A single .ipynb upload now returns a list[UnsolvedFileRead] with one
-        element — preserving the same creation logic as before.
-        """
+    def test_single_ipynb_creates_one_upload_and_one_notebook(self, client, db):
         c, instr_token, _ = client
         nb = _make_notebook_bytes(markdown_cells=["# HW1\nDo task A."])
 
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            res = _post(c, instr_token, 10, ("hw1.ipynb", nb))
+        res = _post_mocked(c, instr_token, 10, ("hw1.ipynb", nb))
 
         assert res.status_code == 201
         data = res.json()
-        assert isinstance(data, list), "Response must be a list"
+        assert isinstance(data, list)
         assert len(data) == 1
         assert data[0]["original_filename"] == "hw1.ipynb"
         assert data[0]["id"] is not None
         assert data[0]["session_id"] == 10
-        assert data[0]["rubric_generated"] is False
+        # No file_role/rubric_generated on the upload response anymore.
+        assert "file_role" not in data[0]
+        assert "rubric_generated" not in data[0]
 
-        # Exactly one DB row created.
-        rows = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
-        assert len(rows) == 1
-        assert rows[0].original_filename == "hw1.ipynb"
+        uploads = db.query(AssignmentUpload).filter(AssignmentUpload.session_id == 10).all()
+        assert len(uploads) == 1
+        assert uploads[0].original_filename == "hw1.ipynb"
 
-    # ── 2. Multiple .ipynb files in one multipart call ─────────────────────────
+        notebooks = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
+        assert len(notebooks) == 1
+        assert notebooks[0].original_filename == "hw1.ipynb"
+        assert notebooks[0].source_upload_id == uploads[0].id
 
-    def test_multiple_ipynb_files_in_one_call(self, client, db):
-        """All three notebooks are created in a single request; list has three items."""
+    # ── 2. Multiple files in one multipart call ────────────────────────────────
+
+    def test_multiple_files_in_one_call_creates_one_upload_row_each(self, client, db):
         c, instr_token, _ = client
         nb1 = _make_notebook_bytes(markdown_cells=["# Lab 1"])
         nb2 = _make_notebook_bytes(markdown_cells=["# Lab 2"])
-        nb3 = _make_notebook_bytes(markdown_cells=["# Lab 3"])
 
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            res = _post(
-                c, instr_token, 10,
-                ("lab1.ipynb", nb1),
-                ("lab2.ipynb", nb2),
-                ("lab3.ipynb", nb3),
-            )
-
-        assert res.status_code == 201
-        data = res.json()
-        assert len(data) == 3
-        returned_names = {item["original_filename"] for item in data}
-        assert returned_names == {"lab1.ipynb", "lab2.ipynb", "lab3.ipynb"}
-
-        rows = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
-        assert len(rows) == 3
-
-    # ── 3. .zip with notebooks at archive root ─────────────────────────────────
-
-    def test_zip_flat_extracts_all_notebooks(self, client, db):
-        """Notebooks at the zip root are extracted and two records are created."""
-        c, instr_token, _ = client
-        nb1 = _make_notebook_bytes(markdown_cells=["# NB1"])
-        nb2 = _make_notebook_bytes(markdown_cells=["# NB2"])
-        zip_bytes = _make_zip({"notebook1.ipynb": nb1, "notebook2.ipynb": nb2})
-
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            res = c.post(
-                "/api/v1/sessions/10/assignments",
-                files=[("files", ("labs.zip", zip_bytes, "application/zip"))],
-                headers={"Authorization": f"Bearer {instr_token}"},
-            )
+        res = _post_mocked(c, instr_token, 10, ("lab1.ipynb", nb1), ("lab2.ipynb", nb2))
 
         assert res.status_code == 201
         data = res.json()
         assert len(data) == 2
         returned_names = {item["original_filename"] for item in data}
-        assert returned_names == {"notebook1.ipynb", "notebook2.ipynb"}
+        assert returned_names == {"lab1.ipynb", "lab2.ipynb"}
 
-        rows = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
-        assert len(rows) == 2
+        assert db.query(AssignmentUpload).filter(AssignmentUpload.session_id == 10).count() == 2
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).count() == 2
 
-    # ── 4. .zip with nested folders (recursive extraction) ─────────────────────
+    # ── 3. .zip with notebooks at archive root → ONE upload row ───────────────
+
+    def test_zip_flat_is_one_upload_row_but_extracts_all_notebooks(self, client, db):
+        c, instr_token, _ = client
+        nb1 = _make_notebook_bytes(markdown_cells=["# NB1"])
+        nb2 = _make_notebook_bytes(markdown_cells=["# NB2"])
+        zip_bytes = _make_zip({"notebook1.ipynb": nb1, "notebook2.ipynb": nb2})
+
+        res = _post_mocked(c, instr_token, 10, ("labs.zip", zip_bytes))
+
+        assert res.status_code == 201
+        data = res.json()
+        # ONE row for the zip itself — not one per notebook inside it.
+        assert len(data) == 1
+        assert data[0]["original_filename"] == "labs.zip"
+
+        # But both notebooks were still extracted internally for grading.
+        notebooks = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
+        assert {n.original_filename for n in notebooks} == {"notebook1.ipynb", "notebook2.ipynb"}
+        upload_id = data[0]["id"]
+        assert all(n.source_upload_id == upload_id for n in notebooks)
+
+    # ── 4. .zip with nested folders (recursive extraction unaffected) ─────────
 
     def test_zip_nested_folders_extracted_recursively(self, client, db):
-        """
-        Notebooks at the zip root, one folder deep, and three folders deep are
-        all found — the recursive extraction logic is applied just as it is for
-        student .zip submissions.
-        """
         c, instr_token, _ = client
         nb_top    = _make_notebook_bytes(markdown_cells=["# Top level"])
         nb_deep   = _make_notebook_bytes(markdown_cells=["# One level deep"])
@@ -263,30 +296,21 @@ class TestUploadAssignment:
             "subdir/level2/level3/deeper.ipynb": nb_deeper,
         })
 
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            res = c.post(
-                "/api/v1/sessions/10/assignments",
-                files=[("files", ("nested.zip", zip_bytes, "application/zip"))],
-                headers={"Authorization": f"Bearer {instr_token}"},
-            )
+        res = _post_mocked(c, instr_token, 10, ("nested.zip", zip_bytes))
 
         assert res.status_code == 201
-        data = res.json()
-        assert len(data) == 3
-        returned_names = {item["original_filename"] for item in data}
-        assert "top.ipynb"    in returned_names
-        assert "deep.ipynb"   in returned_names
-        assert "deeper.ipynb" in returned_names
+        assert len(res.json()) == 1  # one upload row for the zip
 
-    # ── 5. .zip with mixed files — non-.ipynb silently ignored ─────────────────
+        notebooks = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
+        names = {n.original_filename for n in notebooks}
+        assert names == {"top.ipynb", "deep.ipynb", "deeper.ipynb"}
 
-    def test_zip_non_notebook_files_stored_as_resources(self, client, db):
-        """
-        bugfix-post-phase5, Fix 2: non-notebook entries in the archive are now
-        STORED as resource files (in the separate ResourceFile table), not
-        silently dropped. The .ipynb is a gradeable notebook; the rest are
-        resources. All are returned, each tagged with its derived file_role.
-        """
+    # ── 5. .zip with mixed files ────────────────────────────────────────────────
+
+    def test_zip_mixed_files_is_one_upload_row_extraction_unchanged(self, client, db):
+        """The zip displays/downloads as ONE row; internally it still splits
+        into a gradeable UnsolvedFile and downloadable ResourceFile rows,
+        exactly as bugfix-post-phase5 built it."""
         c, instr_token, _ = client
         nb = _make_notebook_bytes(markdown_cells=["# Only notebook"])
         zip_bytes = _make_zip({
@@ -296,190 +320,216 @@ class TestUploadAssignment:
             "README.txt":       b"read me",
         })
 
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            res = c.post(
-                "/api/v1/sessions/10/assignments",
-                files=[("files", ("mixed.zip", zip_bytes, "application/zip"))],
-                headers={"Authorization": f"Bearer {instr_token}"},
-            )
-
-        assert res.status_code == 201
-        by_name = {d["original_filename"]: d for d in res.json()}
-        assert by_name["assignment.ipynb"]["file_role"] == "notebook"
-        assert by_name["helper.py"]["file_role"] == "resource"
-        assert by_name["data.csv"]["file_role"] == "resource"
-        assert by_name["README.txt"]["file_role"] == "resource"
-        assert by_name["data.csv"]["rubric_generated"] is False
-
-        # Structural separation: exactly one gradeable notebook in UnsolvedFile...
-        notebooks = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
-        assert [n.original_filename for n in notebooks] == ["assignment.ipynb"]
-        # ...and the three resources live in the separate ResourceFile table.
-        resources = db.query(ResourceFile).filter(ResourceFile.session_id == 10).all()
-        assert {r.original_filename for r in resources} == {"helper.py", "data.csv", "README.txt"}
-
-    # ── 6. .zip with only resources (no notebooks) → accepted ─────────────────
-
-    def test_zip_with_only_resources_is_accepted(self, client, db):
-        """
-        bugfix-post-phase5, Fix 2: a zip with zero notebooks but at least one
-        other file is now accepted, storing the non-notebook files as
-        resources rather than rejecting the whole upload.
-        """
-        c, instr_token, _ = client
-        zip_bytes = _make_zip({"script.py": b"pass", "notes.md": b"# notes"})
-
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            res = c.post(
-                "/api/v1/sessions/10/assignments",
-                files=[("files", ("resources_only.zip", zip_bytes, "application/zip"))],
-                headers={"Authorization": f"Bearer {instr_token}"},
-            )
+        res = _post_mocked(c, instr_token, 10, ("mixed.zip", zip_bytes))
 
         assert res.status_code == 201
         data = res.json()
-        assert {d["original_filename"] for d in data} == {"script.py", "notes.md"}
-        assert all(d["file_role"] == "resource" for d in data)
-        # No gradeable notebooks were created.
+        assert len(data) == 1
+        assert data[0]["original_filename"] == "mixed.zip"
+
+        notebooks = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
+        assert [n.original_filename for n in notebooks] == ["assignment.ipynb"]
+        resources = db.query(ResourceFile).filter(ResourceFile.session_id == 10).all()
+        assert {r.original_filename for r in resources} == {"helper.py", "data.csv", "README.txt"}
+        assert all(r.source_upload_id == data[0]["id"] for r in resources)
+
+    # ── 6. .zip with only resources (no notebooks) → accepted ─────────────────
+
+    def test_zip_with_only_resources_is_accepted_as_one_upload(self, client, db):
+        c, instr_token, _ = client
+        zip_bytes = _make_zip({"script.py": b"pass", "notes.md": b"# notes"})
+
+        res = _post_mocked(c, instr_token, 10, ("resources_only.zip", zip_bytes))
+
+        assert res.status_code == 201
+        data = res.json()
+        assert len(data) == 1
+        assert data[0]["original_filename"] == "resources_only.zip"
         assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all() == []
         assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).count() == 2
 
-    def test_zip_with_nothing_usable_returns_422(self, client, db):
-        """A zip with only skippable entries (__MACOSX metadata) still 422s."""
+    # ── 7. .zip with NOTHING usable inside → still accepted (Fix 5 changes this) ─
+
+    def test_zip_with_nothing_usable_is_still_accepted_as_one_upload(self, client, db):
+        """Before this fix, a zip with only skippable entries (__MACOSX
+        metadata) 422'd. Now the original zip is always a valid upload in its
+        own right, regardless of what extraction finds inside it."""
         c, instr_token, _ = client
         zip_bytes = _make_zip({"__MACOSX/._x": b"junk"})
 
-        res = c.post(
-            "/api/v1/sessions/10/assignments",
-            files=[("files", ("empty.zip", zip_bytes, "application/zip"))],
-            headers={"Authorization": f"Bearer {instr_token}"},
-        )
+        res = _post_mocked(c, instr_token, 10, ("empty.zip", zip_bytes))
 
-        assert res.status_code == 422
-        assert "no usable files" in res.json()["detail"].lower()
+        assert res.status_code == 201
+        data = res.json()
+        assert len(data) == 1
+        assert data[0]["original_filename"] == "empty.zip"
+        # Nothing extracted, but the upload itself is real.
         assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all() == []
         assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).all() == []
+        assert db.query(AssignmentUpload).filter(AssignmentUpload.session_id == 10).count() == 1
 
-    # ── 7. Duplicate filename → 409 (whole request rejected atomically) ─────────
+    # ── 8. A bare non-notebook, non-zip file → accepted directly ───────────────
+
+    def test_bare_non_notebook_file_is_accepted_directly(self, client, db):
+        """Before this fix this 422'd outright. Any file type must now be
+        uploadable directly — it's just an upload with nothing extracted."""
+        c, instr_token, _ = client
+
+        res = _post_mocked(c, instr_token, 10, ("notes.pdf", b"%PDF-1.4 fake pdf bytes"))
+
+        assert res.status_code == 201
+        data = res.json()
+        assert len(data) == 1
+        assert data[0]["original_filename"] == "notes.pdf"
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all() == []
+        assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).all() == []
+        assert db.query(AssignmentUpload).filter(AssignmentUpload.session_id == 10).count() == 1
+
+    # ── 9. Duplicate filename → 409 (whole request rejected atomically) ────────
 
     def test_duplicate_filename_returns_409_and_no_partial_write(self, client, db):
-        """
-        Uploading a file whose name already exists in the session returns 409.
-        The check is performed before any disk write, so a multi-file request
-        that includes one duplicate rejects the entire batch.
-        """
         c, instr_token, _ = client
         nb = _make_notebook_bytes(markdown_cells=["# HW1"])
 
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            # First upload succeeds
-            res1 = _post(c, instr_token, 10, ("hw1.ipynb", nb))
-            assert res1.status_code == 201
+        res1 = _post_mocked(c, instr_token, 10, ("hw1.ipynb", nb))
+        assert res1.status_code == 201
 
-            # Second upload of same filename → 409
-            res2 = _post(c, instr_token, 10, ("hw1.ipynb", nb))
-
+        res2 = _post_mocked(c, instr_token, 10, ("hw1.ipynb", nb))
         assert res2.status_code == 409
         assert "hw1.ipynb" in res2.json()["detail"]
 
-        # Only the one row from the first successful upload remains.
-        rows = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
-        assert len(rows) == 1
+        assert db.query(AssignmentUpload).filter(AssignmentUpload.session_id == 10).count() == 1
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).count() == 1
 
     def test_multi_file_request_with_one_duplicate_rejected_atomically(self, client, db):
-        """
-        If a multi-file request includes a name that already exists, the whole
-        request is rejected — the new files are NOT partially saved.
-        """
         c, instr_token, _ = client
         nb = _make_notebook_bytes(markdown_cells=["# Existing"])
         nb_new = _make_notebook_bytes(markdown_cells=["# New"])
 
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            # Pre-seed one existing file
-            r = _post(c, instr_token, 10, ("existing.ipynb", nb))
-            assert r.status_code == 201
+        r = _post_mocked(c, instr_token, 10, ("existing.ipynb", nb))
+        assert r.status_code == 201
 
-            # Batch that includes the existing name plus a new one → rejected
-            r2 = _post(c, instr_token, 10, ("existing.ipynb", nb), ("new.ipynb", nb_new))
-
+        r2 = _post_mocked(c, instr_token, 10, ("existing.ipynb", nb), ("new.ipynb", nb_new))
         assert r2.status_code == 409
-        # "new.ipynb" must NOT have been created
-        rows = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
-        assert len(rows) == 1  # only the pre-seeded file
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).count() == 1
 
-    # ── 8. Invalid extension → 422 ────────────────────────────────────────────
-
-    def test_invalid_extension_returns_422(self, client, db):
+    def test_duplicate_against_extracted_notebook_name_also_rejected(self, client, db):
+        """A direct upload whose name collides with a notebook PREVIOUSLY
+        extracted from a zip is still caught — the guard spans notebooks,
+        resources, and original-upload filenames together."""
         c, instr_token, _ = client
+        nb = _make_notebook_bytes(markdown_cells=["# HW"])
+        zip_bytes = _make_zip({"hw.ipynb": nb})
+        r1 = _post_mocked(c, instr_token, 10, ("bundle.zip", zip_bytes))
+        assert r1.status_code == 201
 
-        res = c.post(
-            "/api/v1/sessions/10/assignments",
-            files=[("files", ("script.py", b"print('hi')", "text/plain"))],
-            headers={"Authorization": f"Bearer {instr_token}"},
-        )
+        # Direct upload named exactly like the extracted notebook.
+        r2 = _post_mocked(c, instr_token, 10, ("hw.ipynb", nb))
+        assert r2.status_code == 409
 
-        assert res.status_code == 422
+    def test_duplicate_against_original_upload_filename(self, client, db):
+        """Re-uploading a file with the exact same name as a PREVIOUS
+        original upload (e.g. the same zip name) is rejected too — this is
+        new: the old guard never checked the container's own filename."""
+        c, instr_token, _ = client
+        zip_bytes = _make_zip({"note.txt": b"hello"})
+        r1 = _post_mocked(c, instr_token, 10, ("week1.zip", zip_bytes))
+        assert r1.status_code == 201
 
-    # ── 9. Student cannot upload → 403 ────────────────────────────────────────
+        r2 = _post_mocked(c, instr_token, 10, ("week1.zip", _make_zip({"other.txt": b"bye"})))
+        assert r2.status_code == 409
+        assert "week1.zip" in r2.json()["detail"]
+
+    # ── 10. Student cannot upload → 403 ───────────────────────────────────────
 
     def test_student_upload_returns_403(self, client, db):
         c, _, student_token = client
         nb = _make_notebook_bytes()
-
         res = c.post(
             "/api/v1/sessions/10/assignments",
             files=[("files", ("hw.ipynb", nb, "application/octet-stream"))],
             headers={"Authorization": f"Bearer {student_token}"},
         )
-
         assert res.status_code == 403
 
-    # ── 10. Unauthenticated → 401 ─────────────────────────────────────────────
+    # ── 11. Unauthenticated → 401 ──────────────────────────────────────────────
 
     def test_unauthenticated_returns_401(self, client, db):
         c, _, _ = client
         nb = _make_notebook_bytes()
-
         res = c.post(
             "/api/v1/sessions/10/assignments",
             files=[("files", ("hw.ipynb", nb, "application/octet-stream"))],
-            # No Authorization header
         )
-
         assert res.status_code == 401
 
-    # ── 11. Nonexistent session → 404 ─────────────────────────────────────────
+    # ── 12. Nonexistent session → 404 ──────────────────────────────────────────
 
     def test_nonexistent_session_returns_404(self, client, db):
         c, instr_token, _ = client
         nb = _make_notebook_bytes()
-
         res = c.post(
             "/api/v1/sessions/999/assignments",
             files=[("files", ("hw.ipynb", nb, "application/octet-stream"))],
             headers={"Authorization": f"Bearer {instr_token}"},
         )
-
         assert res.status_code == 404
 
-    # ── 12. parsed_requirements_text set on each row ──────────────────────────
 
-    def test_parsed_requirements_text_stored_per_file(self, client, db):
-        """
-        Each created UnsolvedFile has parsed_requirements_text set.
-        Because save_assignment_file is mocked (no real disk write), the
-        extract_requirements_text call gracefully returns "" for the missing
-        path — confirming the extraction attempt is made and errors are handled
-        without crashing, exactly as in the original single-file flow.
-        """
+# ===========================================================================
+# Grading-pipeline preservation — Option (a)'s whole point: none of this
+# changed. These assert on the DB state that file_matcher.py/grading_pipeline
+# actually read, independent of the display-facing API response shape.
+# ===========================================================================
+
+class TestGradingPipelineUnaffected:
+
+    def test_resources_still_excluded_from_assignment_count(self, client, db):
+        from app.routers.grades import _get_total_assignment_count
+
+        c, instr_token, _ = client
+        nb = _make_notebook_bytes(markdown_cells=["# HW"])
+        zip_bytes = _make_zip({"hw.ipynb": nb, "dataset.csv": b"a,b\n1,2"})
+        res = _post_mocked(c, instr_token, 10, ("bundle.zip", zip_bytes))
+        assert res.status_code == 201
+
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).count() == 1
+        assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).count() == 1
+        assert _get_total_assignment_count(10, db) == 1
+
+    def test_resource_still_never_in_match_candidate_pool(self, client, db):
+        c, instr_token, _ = client
+        nb = _make_notebook_bytes(markdown_cells=["# HW"])
+        zip_bytes = _make_zip({"hw.ipynb": nb, "notes.pdf": b"%PDF-1.4 fake"})
+        _post_mocked(c, instr_token, 10, ("bundle.zip", zip_bytes))
+
+        candidates = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
+        assert [cand.original_filename for cand in candidates] == ["hw.ipynb"]
+
+    def test_duplicate_across_extraction_tables_still_atomic(self, client, db):
+        c, instr_token, _ = client
+        nb = _make_notebook_bytes(markdown_cells=["# HW"])
+
+        first = _post_mocked(c, instr_token, 10, ("r.zip", _make_zip({"data.csv": b"a,b"})))
+        assert first.status_code == 201
+        nb_before = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).count()
+        res_before = db.query(ResourceFile).filter(ResourceFile.session_id == 10).count()
+        upload_before = db.query(AssignmentUpload).filter(AssignmentUpload.session_id == 10).count()
+
+        clash = _make_zip({"new.ipynb": nb, "data.csv": b"x,y"})
+        res = _post_mocked(c, instr_token, 10, ("clash.zip", clash))
+        assert res.status_code == 409
+        assert "data.csv" in res.json()["detail"]
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).count() == nb_before
+        assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).count() == res_before
+        assert db.query(AssignmentUpload).filter(AssignmentUpload.session_id == 10).count() == upload_before
+
+    def test_parsed_requirements_text_still_stored_per_notebook(self, client, db):
         c, instr_token, _ = client
         nb1 = _make_notebook_bytes(markdown_cells=["# Task 1\nImplement linear regression."])
         nb2 = _make_notebook_bytes(markdown_cells=["# Task 2\nImplement logistic regression."])
 
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            res = _post(c, instr_token, 10, ("hw1.ipynb", nb1), ("hw2.ipynb", nb2))
-
+        res = _post_mocked(c, instr_token, 10, ("hw1.ipynb", nb1), ("hw2.ipynb", nb2))
         assert res.status_code == 201
 
         rows = (
@@ -490,330 +540,181 @@ class TestUploadAssignment:
         )
         assert len(rows) == 2
         for row in rows:
-            # Column is set (to "" when file not physically on disk) — never None
-            # because extract_requirements_text never raises.
             assert row.parsed_requirements_text is not None
 
-    # ── 13. Correct count in DB after multi-file upload ───────────────────────
-
-    def test_db_row_count_matches_uploaded_file_count(self, client, db):
-        """After uploading N files, exactly N UnsolvedFile rows exist."""
-        c, instr_token, _ = client
-        notebooks = [(f"hw{i}.ipynb", _make_notebook_bytes(markdown_cells=[f"# HW {i}"])) for i in range(1, 6)]
-
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            res = _post(c, instr_token, 10, *notebooks)
-
-        assert res.status_code == 201
-        assert len(res.json()) == 5
-
-        rows = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
-        assert len(rows) == 5
-
-    # ── 14. Response fields match DB state ────────────────────────────────────
-
-    def test_response_fields_match_db(self, client, db):
-        """
-        Every item in the response list has an id, session_id=10,
-        rubric_generated=False, and an original_filename matching a DB row.
-        """
-        c, instr_token, _ = client
-        nb = _make_notebook_bytes(markdown_cells=["# Assignment"])
-
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            res = _post(c, instr_token, 10, ("assign.ipynb", nb))
-
-        assert res.status_code == 201
-        item = res.json()[0]
-
-        db_row = db.query(UnsolvedFile).filter(UnsolvedFile.id == item["id"]).first()
-        assert db_row is not None
-        assert db_row.session_id == item["session_id"] == 10
-        assert db_row.original_filename == item["original_filename"] == "assign.ipynb"
-        assert item["rubric_generated"] is False
-        assert db_row.rubric_json is None
-
 
 # ===========================================================================
-# bugfix-post-phase5, Fix 2 (ResourceFile table): resources are stored in a
-# structurally separate table, so they never enter grading paths.
+# Display / download / delete — the new contract
 # ===========================================================================
 
-class TestResourceFileHandling:
-    def test_resources_excluded_from_assignment_count_structurally(self, client, db):
-        """The combined-score DENOMINATOR counts notebooks only. With resources
-        in their own table, _get_total_assignment_count is UNCHANGED from before
-        Fix 2 (queries UnsolvedFile) and simply never sees them."""
-        from app.routers.grades import _get_total_assignment_count
+class TestListDownloadDelete:
 
+    def test_list_returns_uploads_not_extracted_pieces(self, client, db):
         c, instr_token, _ = client
         nb = _make_notebook_bytes(markdown_cells=["# HW"])
-        zip_bytes = _make_zip({"hw.ipynb": nb, "dataset.csv": b"a,b\n1,2"})
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            res = c.post(
-                "/api/v1/sessions/10/assignments",
-                files=[("files", ("bundle.zip", zip_bytes, "application/zip"))],
-                headers={"Authorization": f"Bearer {instr_token}"},
-            )
-        assert res.status_code == 201
-        # One notebook + one resource stored across the two tables.
-        assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).count() == 1
-        assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).count() == 1
-        # The denominator is 1 — the resource is not in the table it queries.
-        assert _get_total_assignment_count(10, db) == 1
-
-    def test_resource_not_in_match_candidate_pool(self, client, db):
-        """The matcher builds its candidate pool from UnsolvedFile; a resource
-        is in a different table, so it can never be a match candidate."""
-        c, instr_token, _ = client
-        nb = _make_notebook_bytes(markdown_cells=["# HW"])
-        zip_bytes = _make_zip({"hw.ipynb": nb, "notes.pdf": b"%PDF-1.4 fake"})
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            c.post(
-                "/api/v1/sessions/10/assignments",
-                files=[("files", ("bundle.zip", zip_bytes, "application/zip"))],
-                headers={"Authorization": f"Bearer {instr_token}"},
-            )
-        candidates = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).all()
-        assert [c_.original_filename for c_ in candidates] == ["hw.ipynb"]
-
-    def test_duplicate_name_across_tables_rejected_atomically(self, client, db):
-        """The duplicate guard spans BOTH tables: re-uploading a name already
-        used by a notebook OR a resource rejects the whole batch, atomically."""
-        c, instr_token, _ = client
-        nb = _make_notebook_bytes(markdown_cells=["# HW"])
-
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            first = c.post(
-                "/api/v1/sessions/10/assignments",
-                files=[("files", ("r.zip", _make_zip({"data.csv": b"a,b"}), "application/zip"))],
-                headers={"Authorization": f"Bearer {instr_token}"},
-            )
-        assert first.status_code == 201
-        nb_before = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).count()
-        res_before = db.query(ResourceFile).filter(ResourceFile.session_id == 10).count()
-
-        # New notebook + a resource name that collides with the stored data.csv.
-        clash = _make_zip({"new.ipynb": nb, "data.csv": b"x,y"})
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            res = c.post(
-                "/api/v1/sessions/10/assignments",
-                files=[("files", ("clash.zip", clash, "application/zip"))],
-                headers={"Authorization": f"Bearer {instr_token}"},
-            )
-        assert res.status_code == 409
-        assert "data.csv" in res.json()["detail"]
-        # Nothing new written to EITHER table — new.ipynb must not have landed.
-        assert db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).count() == nb_before
-        assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).count() == res_before
-
-    def test_resource_download_and_listing(self, client, db):
-        """Resources are downloadable and listed via their own endpoints."""
-        c, instr_token, _ = client
-        zip_bytes = _make_zip({"dataset.csv": b"a,b\n1,2"})
-        # Use the real save so the file exists on disk for download.
-        res = c.post(
-            "/api/v1/sessions/10/assignments",
-            files=[("files", ("r.zip", zip_bytes, "application/zip"))],
-            headers={"Authorization": f"Bearer {instr_token}"},
-        )
-        assert res.status_code == 201
-        rid = res.json()[0]["id"]
+        zip_bytes = _make_zip({"hw.ipynb": nb, "data.csv": b"a,b"})
+        _post_mocked(c, instr_token, 10, ("bundle.zip", zip_bytes))
+        _post_mocked(c, instr_token, 10, ("notes.pdf", b"%PDF fake"))
 
         listed = c.get(
-            "/api/v1/sessions/10/assignments/resources",
+            "/api/v1/sessions/10/assignments",
             headers={"Authorization": f"Bearer {instr_token}"},
         )
         assert listed.status_code == 200
-        assert [r["original_filename"] for r in listed.json()] == ["dataset.csv"]
+        names = {item["original_filename"] for item in listed.json()}
+        # Exactly the two things uploaded — never "hw.ipynb" or "data.csv".
+        assert names == {"bundle.zip", "notes.pdf"}
+
+    def test_download_returns_original_bytes_exactly(self, client, db):
+        """Real save (not mocked) so there's an actual file on disk, and the
+        original zip's bytes — not a reconstruction — come back untouched."""
+        c, instr_token, _ = client
+        original_bytes = _make_zip({"hw.ipynb": _make_notebook_bytes(), "data.csv": b"a,b\n1,2"})
+
+        upload = c.post(
+            "/api/v1/sessions/10/assignments",
+            files=[("files", ("bundle.zip", original_bytes, "application/zip"))],
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert upload.status_code == 201
+        upload_id = upload.json()[0]["id"]
 
         dl = c.get(
-            f"/api/v1/sessions/10/assignments/resources/{rid}/download",
+            f"/api/v1/sessions/10/assignments/{upload_id}/download",
             headers={"Authorization": f"Bearer {instr_token}"},
         )
         assert dl.status_code == 200
-        assert dl.content == b"a,b\n1,2"
+        # Byte-for-byte identical to what was uploaded — not a re-zip of parts.
+        assert dl.content == original_bytes
 
-    def test_session_detail_splits_notebooks_and_resources(self, client, db):
-        """SessionRead exposes unsolved_files (notebooks) and resource_files
-        (resources) separately."""
+    def test_download_of_bare_non_notebook_file_returns_its_own_bytes(self, client, db):
+        c, instr_token, _ = client
+        pdf_bytes = b"%PDF-1.4 totally real pdf content"
+
+        upload = c.post(
+            "/api/v1/sessions/10/assignments",
+            files=[("files", ("notes.pdf", pdf_bytes, "application/pdf"))],
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert upload.status_code == 201
+        upload_id = upload.json()[0]["id"]
+
+        dl = c.get(
+            f"/api/v1/sessions/10/assignments/{upload_id}/download",
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert dl.status_code == 200
+        assert dl.content == pdf_bytes
+
+    def test_session_detail_exposes_uploads_separately_from_internal_counts(self, client, db):
+        """assignment_uploads is the display list; unsolved_files/
+        resource_files still ride along on SessionRead too, but only for
+        internal count purposes (e.g. totalAssignmentFiles) — not for a
+        separate UI listing anymore."""
         c, instr_token, _ = client
         nb = _make_notebook_bytes(markdown_cells=["# HW"])
         zip_bytes = _make_zip({"hw.ipynb": nb, "slides.pdf": b"%PDF fake", "data.csv": b"a,b"})
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            c.post(
-                "/api/v1/sessions/10/assignments",
-                files=[("files", ("bundle.zip", zip_bytes, "application/zip"))],
-                headers={"Authorization": f"Bearer {instr_token}"},
-            )
+        _post_mocked(c, instr_token, 10, ("bundle.zip", zip_bytes))
+
         detail = c.get(
             "/api/v1/sessions/10",
             headers={"Authorization": f"Bearer {instr_token}"},
         ).json()
+        assert [u["original_filename"] for u in detail["assignment_uploads"]] == ["bundle.zip"]
         assert [f["original_filename"] for f in detail["unsolved_files"]] == ["hw.ipynb"]
         assert {f["original_filename"] for f in detail["resource_files"]} == {"slides.pdf", "data.csv"}
 
-    def test_pure_notebook_zip_unchanged(self, client, db):
-        """Regression: a zip of only notebooks behaves exactly as before —
-        every entry a gradeable notebook, no resource rows created."""
+    def test_delete_cascades_to_extracted_notebook_and_its_file_on_disk(self, client, db):
+        """Deleting the original upload removes the AssignmentUpload row AND
+        the UnsolvedFile it produced, in the DB and on disk — not just the
+        original zip."""
         c, instr_token, _ = client
-        nb1 = _make_notebook_bytes(markdown_cells=["# One"])
-        nb2 = _make_notebook_bytes(markdown_cells=["# Two"])
-        zip_bytes = _make_zip({"a.ipynb": nb1, "b.ipynb": nb2})
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            res = c.post(
-                "/api/v1/sessions/10/assignments",
-                files=[("files", ("nbs.zip", zip_bytes, "application/zip"))],
-                headers={"Authorization": f"Bearer {instr_token}"},
-            )
-        assert res.status_code == 201
-        data = res.json()
-        assert {d["original_filename"] for d in data} == {"a.ipynb", "b.ipynb"}
-        assert all(d["file_role"] == "notebook" for d in data)
-        assert db.query(ResourceFile).filter(ResourceFile.session_id == 10).all() == []
+        zip_bytes = _make_zip({"hw.ipynb": _make_notebook_bytes(), "data.csv": b"a,b"})
 
-
-# ===========================================================================
-# bugfix-resource-file-delete: DELETE /sessions/{id}/assignments/resources/{id}
-# ===========================================================================
-
-class TestDeleteResource:
-    """
-    Mirrors the notebook delete route (DELETE /sessions/{id}/assignments/{id})
-    exactly: instructor-only, 204 on success, 404 if the resource doesn't
-    exist or belongs to a different session, DB row + on-disk file both
-    removed.
-    """
-
-    def test_delete_removes_db_row_and_disk_file(self, client, db):
-        c, instr_token, _ = client
-        zip_bytes = _make_zip({"dataset.csv": b"a,b\n1,2"})
-        # Real save (not mocked) so there is an actual file on disk to delete.
         upload = c.post(
             "/api/v1/sessions/10/assignments",
-            files=[("files", ("r.zip", zip_bytes, "application/zip"))],
+            files=[("files", ("bundle.zip", zip_bytes, "application/zip"))],
             headers={"Authorization": f"Bearer {instr_token}"},
         )
         assert upload.status_code == 201
-        rid = upload.json()[0]["id"]
+        upload_id = upload.json()[0]["id"]
 
-        row = db.query(ResourceFile).filter(ResourceFile.id == rid).one()
         from app.services.storage import absolute_path
-        abs_path = absolute_path(row.file_path)
-        assert abs_path.exists()
+        upload_row = db.query(AssignmentUpload).filter(AssignmentUpload.id == upload_id).one()
+        notebook_row = db.query(UnsolvedFile).filter(UnsolvedFile.source_upload_id == upload_id).one()
+        resource_row = db.query(ResourceFile).filter(ResourceFile.source_upload_id == upload_id).one()
+
+        original_path = absolute_path(upload_row.file_path)
+        notebook_path = absolute_path(notebook_row.file_path)
+        resource_path = absolute_path(resource_row.file_path)
+        assert original_path.exists() and notebook_path.exists() and resource_path.exists()
 
         res = c.delete(
-            f"/api/v1/sessions/10/assignments/resources/{rid}",
+            f"/api/v1/sessions/10/assignments/{upload_id}",
             headers={"Authorization": f"Bearer {instr_token}"},
         )
         assert res.status_code == 204
-        assert res.content == b""
 
-        assert db.query(ResourceFile).filter(ResourceFile.id == rid).first() is None
-        assert not abs_path.exists()
+        assert db.query(AssignmentUpload).filter(AssignmentUpload.id == upload_id).first() is None
+        assert db.query(UnsolvedFile).filter(UnsolvedFile.source_upload_id == upload_id).first() is None
+        assert db.query(ResourceFile).filter(ResourceFile.source_upload_id == upload_id).first() is None
+        assert not original_path.exists()
+        assert not notebook_path.exists()
+        assert not resource_path.exists()
 
-    def test_delete_nonexistent_resource_404(self, client, db):
+    def test_delete_nonexistent_upload_404(self, client, db):
         c, instr_token, _ = client
         res = c.delete(
-            "/api/v1/sessions/10/assignments/resources/9999",
+            "/api/v1/sessions/10/assignments/9999",
             headers={"Authorization": f"Bearer {instr_token}"},
         )
         assert res.status_code == 404
 
-    def test_delete_resource_from_wrong_session_404(self, client, db):
-        """A resource that exists but belongs to a different session must
-        404, same as the notebook route's equivalent case."""
+    def test_delete_upload_from_wrong_session_404(self, client, db):
         c, instr_token, _ = client
         other_session = LMSSession(id=11, title="Week 2 Day 1")
         db.add(other_session)
         db.commit()
 
-        zip_bytes = _make_zip({"dataset.csv": b"a,b\n1,2"})
         upload = c.post(
             "/api/v1/sessions/10/assignments",
-            files=[("files", ("r.zip", zip_bytes, "application/zip"))],
+            files=[("files", ("notes.pdf", b"%PDF fake", "application/pdf"))],
             headers={"Authorization": f"Bearer {instr_token}"},
         )
-        rid = upload.json()[0]["id"]
+        upload_id = upload.json()[0]["id"]
 
         res = c.delete(
-            f"/api/v1/sessions/11/assignments/resources/{rid}",
+            f"/api/v1/sessions/11/assignments/{upload_id}",
             headers={"Authorization": f"Bearer {instr_token}"},
         )
         assert res.status_code == 404
-        # Untouched — still exists under its real session.
-        assert db.query(ResourceFile).filter(ResourceFile.id == rid).first() is not None
+        assert db.query(AssignmentUpload).filter(AssignmentUpload.id == upload_id).first() is not None
 
-    def test_student_cannot_delete_resource(self, client, db):
+    def test_student_cannot_delete_upload(self, client, db):
         c, instr_token, student_token = client
-        zip_bytes = _make_zip({"dataset.csv": b"a,b\n1,2"})
         upload = c.post(
             "/api/v1/sessions/10/assignments",
-            files=[("files", ("r.zip", zip_bytes, "application/zip"))],
+            files=[("files", ("notes.pdf", b"%PDF fake", "application/pdf"))],
             headers={"Authorization": f"Bearer {instr_token}"},
         )
-        rid = upload.json()[0]["id"]
+        upload_id = upload.json()[0]["id"]
 
         res = c.delete(
-            f"/api/v1/sessions/10/assignments/resources/{rid}",
+            f"/api/v1/sessions/10/assignments/{upload_id}",
             headers={"Authorization": f"Bearer {student_token}"},
         )
         assert res.status_code == 403
-        assert db.query(ResourceFile).filter(ResourceFile.id == rid).first() is not None
+        assert db.query(AssignmentUpload).filter(AssignmentUpload.id == upload_id).first() is not None
 
-    def test_unauthenticated_cannot_delete_resource(self, client, db):
+    def test_unauthenticated_cannot_delete_upload(self, client, db):
         c, instr_token, _ = client
-        zip_bytes = _make_zip({"dataset.csv": b"a,b\n1,2"})
         upload = c.post(
             "/api/v1/sessions/10/assignments",
-            files=[("files", ("r.zip", zip_bytes, "application/zip"))],
+            files=[("files", ("notes.pdf", b"%PDF fake", "application/pdf"))],
             headers={"Authorization": f"Bearer {instr_token}"},
         )
-        rid = upload.json()[0]["id"]
+        upload_id = upload.json()[0]["id"]
 
-        res = c.delete(f"/api/v1/sessions/10/assignments/resources/{rid}")
+        res = c.delete(f"/api/v1/sessions/10/assignments/{upload_id}")
         assert res.status_code == 401
-        assert db.query(ResourceFile).filter(ResourceFile.id == rid).first() is not None
-
-    def test_deleting_a_resource_does_not_touch_a_same_id_notebook(self, client, db):
-        """Regression: notebook and resource ids can collide (both tables
-        start at 1) — deleting one must never remove or affect the other."""
-        c, instr_token, _ = client
-        nb = _make_notebook_bytes(markdown_cells=["# HW"])
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            nb_res = _post(c, instr_token, 10, ("hw.ipynb", nb))
-        nb_id = nb_res.json()[0]["id"]
-
-        zip_bytes = _make_zip({"dataset.csv": b"a,b\n1,2"})
-        upload = c.post(
-            "/api/v1/sessions/10/assignments",
-            files=[("files", ("r.zip", zip_bytes, "application/zip"))],
-            headers={"Authorization": f"Bearer {instr_token}"},
-        )
-        rid = upload.json()[0]["id"]
-        assert rid == nb_id, "test assumes colliding ids across the two tables"
-
-        res = c.delete(
-            f"/api/v1/sessions/10/assignments/resources/{rid}",
-            headers={"Authorization": f"Bearer {instr_token}"},
-        )
-        assert res.status_code == 204
-
-        # The notebook with the same numeric id is untouched.
-        assert db.query(UnsolvedFile).filter(UnsolvedFile.id == nb_id).first() is not None
-
-    def test_notebook_delete_route_still_unaffected(self, client, db):
-        """Regression: the existing notebook delete route is untouched by
-        this change."""
-        c, instr_token, _ = client
-        nb = _make_notebook_bytes(markdown_cells=["# HW"])
-        with patch("app.routers.assignments.save_assignment_file", side_effect=_mock_save):
-            nb_res = _post(c, instr_token, 10, ("hw.ipynb", nb))
-        nb_id = nb_res.json()[0]["id"]
-
-        res = c.delete(
-            f"/api/v1/sessions/10/assignments/{nb_id}",
-            headers={"Authorization": f"Bearer {instr_token}"},
-        )
-        assert res.status_code == 204
-        assert db.query(UnsolvedFile).filter(UnsolvedFile.id == nb_id).first() is None
+        assert db.query(AssignmentUpload).filter(AssignmentUpload.id == upload_id).first() is not None

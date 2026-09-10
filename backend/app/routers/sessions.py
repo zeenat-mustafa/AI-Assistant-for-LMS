@@ -18,6 +18,7 @@ from app.models.session import LMSSession
 from app.models.unsolved_file import UnsolvedFile
 from app.models.user import User
 from app.schemas.session import SessionCreate, SessionList, SessionRead
+from app.schemas.assignment_upload import AssignmentUploadRead
 from app.schemas.unsolved_file import UnsolvedFileRead
 from app.schemas.resource_file import ResourceFileRead
 from app.services.auth import get_current_user, require_instructor
@@ -34,6 +35,9 @@ def _session_read(session: LMSSession) -> SessionRead:
         title=session.title,
         instructor_id=session.instructor_id,
         created_at=session.created_at,
+        assignment_uploads=[
+            AssignmentUploadRead.from_orm_model(u) for u in session.assignment_uploads
+        ],
         unsolved_files=[
             UnsolvedFileRead.from_orm_model(f) for f in session.unsolved_files
         ],

@@ -36,6 +36,9 @@ class LMSSession(Base):
     instructor: Mapped["User | None"] = relationship(  # noqa: F821
         "User", back_populates="owned_sessions"
     )
+    assignment_uploads: Mapped[list["AssignmentUpload"]] = relationship(  # noqa: F821
+        "AssignmentUpload", back_populates="session", cascade="all, delete-orphan"
+    )
     unsolved_files: Mapped[list["UnsolvedFile"]] = relationship(  # noqa: F821
         "UnsolvedFile", back_populates="session", cascade="all, delete-orphan"
     )

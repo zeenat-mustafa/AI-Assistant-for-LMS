@@ -37,11 +37,37 @@ export interface UserRegister {
   password: string;
 }
 
+// -- Assignment uploads (backend/app/schemas/assignment_upload.py) -----------
+
+/**
+ * `AssignmentUploadRead` -- one entry in POST/GET /sessions/{id}/assignments.
+ *
+ * bugfix-original-upload-preservation: this is the ONLY thing listing,
+ * display, and download ever serve for assignment files. One row per actual
+ * upload event -- a zip is one row with its own filename, never a list of
+ * what's inside it. Carries no notion of what the upload extracted into
+ * internally (no file_role, no rubric_generated): notebooks/resources are
+ * still extracted for the grading pipeline exactly as before, but that never
+ * surfaces here.
+ */
+export interface AssignmentUploadRead {
+  id: number;
+  session_id: number;
+  original_filename: string;
+  content_type: string | null;
+  uploaded_at: string;
+}
+
 // -- Assignment files (backend/app/schemas/unsolved_file.py) -----------------
 
 /**
- * `UnsolvedFileRead` -- one instructor-uploaded assignment file.
- * `file_path` and `rubric_json` are deliberately not exposed by the backend.
+ * `UnsolvedFileRead` -- one notebook extracted internally from an
+ * AssignmentUpload, for the grading pipeline. `file_path` and `rubric_json`
+ * are deliberately not exposed by the backend.
+ *
+ * No longer independently listed or downloaded anywhere in the UI -- kept in
+ * `SessionRead.unsolved_files` purely so counts like totalAssignmentFiles
+ * keep working without a separate request.
  */
 export interface UnsolvedFileRead {
   id: number;
@@ -56,36 +82,16 @@ export interface UnsolvedFileRead {
 
 /**
  * `ResourceFileRead` -- one non-notebook supporting file (dataset, slides,
- * PDF) uploaded inside a `.zip` alongside or instead of notebooks.
+ * PDF) extracted internally from an AssignmentUpload's `.zip`.
  *
- * Structurally separate from `UnsolvedFileRead`, not a variant of it: the
- * backend stores these in their own `resource_files` table. A resource is
- * downloadable only -- it is never parsed, never file-matched, never given a
- * rubric, and never counted toward a session's assignment total. It therefore
- * has NO `rubric_generated` field, which is why the two are kept as distinct
- * types rather than one type with a role flag.
+ * No longer independently listed, downloaded, or deleted anywhere in the UI
+ * (bugfix-original-upload-preservation) -- kept in `SessionRead.resource_files`
+ * purely for internal bookkeeping/counts, same reason as `UnsolvedFileRead`.
  */
 export interface ResourceFileRead {
   id: number;
   session_id: number;
   original_filename: string;
-  uploaded_at: string;
-}
-
-/**
- * `AssignmentUploadItem` -- one entry in POST /sessions/{id}/assignments'
- * response, which is a unified view over BOTH tables.
- *
- * `file_role` is derived by the backend from which table the row landed in;
- * it is not a stored column on either model. `rubric_generated` is always
- * false for a resource.
- */
-export interface AssignmentUploadItem {
-  id: number;
-  session_id: number;
-  original_filename: string;
-  file_role: "notebook" | "resource";
-  rubric_generated: boolean;
   uploaded_at: string;
 }
 
@@ -97,11 +103,17 @@ export interface SessionRead {
   title: string;
   instructor_id: number | null;
   created_at: string;
-  /** Gradeable notebooks only -- resources never appear here. */
+  /**
+   * What instructors actually uploaded, one row per upload event. The ONLY
+   * thing the assignment-files UI lists or downloads.
+   */
+  assignment_uploads: AssignmentUploadRead[];
+  /** Gradeable notebooks, extracted internally -- for counts only, never rendered as a list. */
   unsolved_files: UnsolvedFileRead[];
   /**
-   * Downloadable-only supporting files. Defaults to `[]` on the backend, so
-   * a session with no resource uploads returns an empty array, not null.
+   * Downloadable-only supporting files, extracted internally -- for counts
+   * only, never rendered as a list. Defaults to `[]` on the backend, so a
+   * session with no resource uploads returns an empty array, not null.
    */
   resource_files: ResourceFileRead[];
 }

@@ -2,37 +2,32 @@
 
 import { ApiError, apiFetch, buildRequestInit, type RequestOptions } from "./client";
 import { buildUrl } from "./config";
-import type {
-  AssignmentUploadItem,
-  GenerateRubricResult,
-  ResourceFileRead,
-  UnsolvedFileRead,
-} from "./types";
+import type { AssignmentUploadRead, GenerateRubricResult } from "./types";
 
 /**
  * POST /sessions/{id}/assignments -- instructor only, 201.
  *
- * Accepts one or more `.ipynb` files, or a single `.zip` that the backend
- * extracts recursively. The multipart field name is `files` and repeats once
- * per file; the response is always a list, even for a single upload.
+ * bugfix-original-upload-preservation: any file type is accepted, single or
+ * inside a `.zip` -- there is no extension restriction anymore. The
+ * multipart field name is `files` and repeats once per file; the response
+ * is always a list, one entry per file uploaded (a `.zip` is one entry with
+ * its own filename, never a list of what's inside it).
  *
- * The response element type is `AssignmentUploadItem`, NOT `UnsolvedFileRead`:
- * a zip may create rows in BOTH the notebook and the resource table, so each
- * item carries a `file_role` saying which one it landed in. Split the result
- * on that field -- the two kinds are listed and downloaded separately.
+ * Notebooks (standalone or bundled in a zip) are still extracted internally
+ * for grading exactly as before; that never appears in this response.
  *
- * The backend validates the entire batch (extension rules, then duplicate
- * filenames across BOTH tables) before writing anything, so a rejection means
- * nothing at all was saved.
+ * The backend validates the entire batch (duplicate filenames, across
+ * uploads and whatever they'd extract into) before writing anything, so a
+ * rejection means nothing at all was saved.
  */
 export function uploadAssignment(
   sessionId: number,
   files: File[],
   options: RequestOptions = {},
-): Promise<AssignmentUploadItem[]> {
+): Promise<AssignmentUploadRead[]> {
   const form = new FormData();
   for (const file of files) form.append("files", file, file.name);
-  return apiFetch<AssignmentUploadItem[]>(`/sessions/${sessionId}/assignments`, {
+  return apiFetch<AssignmentUploadRead[]>(`/sessions/${sessionId}/assignments`, {
     ...options,
     method: "POST",
     body: form,
@@ -40,36 +35,34 @@ export function uploadAssignment(
 }
 
 /**
- * GET /sessions/{id}/assignments -- gradeable NOTEBOOKS for a session.
- * Resources are not included here; use `listResources` for those.
+ * GET /sessions/{id}/assignments -- exactly what was uploaded to a session,
+ * one row per upload event.
  */
 export function listAssignments(
   sessionId: number,
   options: RequestOptions = {},
-): Promise<UnsolvedFileRead[]> {
-  return apiFetch<UnsolvedFileRead[]>(`/sessions/${sessionId}/assignments`, {
+): Promise<AssignmentUploadRead[]> {
+  return apiFetch<AssignmentUploadRead[]>(`/sessions/${sessionId}/assignments`, {
     ...options,
     method: "GET",
   });
 }
 
 /**
- * URL of GET /sessions/{id}/assignments/{fileId}/download.
+ * URL of GET /sessions/{id}/assignments/{uploadId}/download.
  *
  * Returned as a URL rather than fetched, because a download is a navigation,
  * not a JSON call. Note the endpoint requires auth, so a bare `<a href>` will
  * 401 -- use `downloadAssignment` below to fetch it with the bearer token.
  */
-export function assignmentDownloadUrl(sessionId: number, fileId: number): string {
-  return buildUrl(`/sessions/${sessionId}/assignments/${fileId}/download`);
+export function assignmentDownloadUrl(sessionId: number, uploadId: number): string {
+  return buildUrl(`/sessions/${sessionId}/assignments/${uploadId}/download`);
 }
 
 /**
  * Fetch a download endpoint's bytes as an authenticated Blob.
  *
- * Not `apiFetch`: the response is a binary file, not JSON. Shared by the
- * notebook and resource download helpers below so the two cannot drift in how
- * they attach the bearer token or surface a transport failure.
+ * Not `apiFetch`: the response is a binary file, not JSON.
  */
 async function fetchFileBlob(path: string, options: RequestOptions): Promise<Blob> {
   const { url, init } = buildRequestInit({ ...options, method: "GET" });
@@ -88,79 +81,33 @@ async function fetchFileBlob(path: string, options: RequestOptions): Promise<Blo
 }
 
 /**
- * Fetch an assignment notebook's bytes as a Blob, authenticated.
- * The caller turns it into an object URL to trigger the browser download.
+ * Fetch an assignment upload's bytes as a Blob, authenticated -- exactly
+ * what was uploaded, byte-for-byte (a zip comes back as that same zip, never
+ * a reconstruction). The caller turns it into an object URL to trigger the
+ * browser download.
  */
 export function downloadAssignment(
   sessionId: number,
-  fileId: number,
+  uploadId: number,
   options: RequestOptions = {},
 ): Promise<Blob> {
-  return fetchFileBlob(`/sessions/${sessionId}/assignments/${fileId}/download`, options);
+  return fetchFileBlob(`/sessions/${sessionId}/assignments/${uploadId}/download`, options);
 }
 
 /**
- * GET /sessions/{id}/assignments/resources -- the session's non-notebook
- * supporting files. Available to any authenticated user, not instructors only,
- * so the student view uses this same call.
- */
-export function listResources(
-  sessionId: number,
-  options: RequestOptions = {},
-): Promise<ResourceFileRead[]> {
-  return apiFetch<ResourceFileRead[]>(`/sessions/${sessionId}/assignments/resources`, {
-    ...options,
-    method: "GET",
-  });
-}
-
-/** URL of GET /sessions/{id}/assignments/resources/{resourceId}/download. */
-export function resourceDownloadUrl(sessionId: number, resourceId: number): string {
-  return buildUrl(`/sessions/${sessionId}/assignments/resources/${resourceId}/download`);
-}
-
-/**
- * Fetch a resource file's bytes as a Blob, authenticated -- same pattern as
- * `downloadAssignment`, against the separate resources route.
- */
-export function downloadResource(
-  sessionId: number,
-  resourceId: number,
-  options: RequestOptions = {},
-): Promise<Blob> {
-  return fetchFileBlob(
-    `/sessions/${sessionId}/assignments/resources/${resourceId}/download`,
-    options,
-  );
-}
-
-/**
- * DELETE /sessions/{id}/assignments/{fileId} -- instructor only. 204.
+ * DELETE /sessions/{id}/assignments/{uploadId} -- instructor only. 204.
  *
- * NOTEBOOKS ONLY. Use `deleteResource` below for the resources counterpart.
+ * Removes the upload AND everything it produced internally (extracted
+ * notebooks/resources, in the DB and on disk) -- deleting a zip that
+ * contained a notebook also removes that notebook's rubric/grading
+ * candidacy, though any Grade already recorded against it is untouched.
  */
 export function deleteAssignment(
   sessionId: number,
-  fileId: number,
+  uploadId: number,
   options: RequestOptions = {},
 ): Promise<void> {
-  return apiFetch<void>(`/sessions/${sessionId}/assignments/${fileId}`, {
-    ...options,
-    method: "DELETE",
-  });
-}
-
-/**
- * DELETE /sessions/{id}/assignments/resources/{resourceId} -- instructor
- * only. 204. Same pattern as `deleteAssignment`, against the separate
- * resources route.
- */
-export function deleteResource(
-  sessionId: number,
-  resourceId: number,
-  options: RequestOptions = {},
-): Promise<void> {
-  return apiFetch<void>(`/sessions/${sessionId}/assignments/resources/${resourceId}`, {
+  return apiFetch<void>(`/sessions/${sessionId}/assignments/${uploadId}`, {
     ...options,
     method: "DELETE",
   });
@@ -168,7 +115,9 @@ export function deleteResource(
 
 /**
  * POST /sessions/{id}/assignments/{fileId}/generate-rubric -- instructor only.
- * `force: true` regenerates over an existing cached rubric.
+ * Unchanged: still keyed by the internal UnsolvedFile id (grading-pipeline
+ * use), not an AssignmentUpload id. `force: true` regenerates over an
+ * existing cached rubric.
  */
 export function generateRubric(
   sessionId: number,

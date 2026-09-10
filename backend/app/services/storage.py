@@ -8,7 +8,11 @@ switching to cloud storage later only requires replacing the functions here.
 Directory layout under storage_root:
     {session_id}/
         assignments/
-            {original_filename}       ← instructor-uploaded unsolved files
+            originals/
+                {original_filename}   ← raw bytes exactly as the instructor
+                                         uploaded them, one per upload event
+            {original_filename}       ← notebooks/resources extracted from
+                                         the above, for internal grading use
         submissions/
             {student_id}/
                 {original_filename}   ← raw student upload (.ipynb or .zip)
@@ -46,6 +50,13 @@ def _storage_root() -> Path:
 def assignment_dir(session_id: int) -> Path:
     """Directory for a session's instructor-uploaded assignment files."""
     p = _storage_root() / str(session_id) / "assignments"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def assignment_originals_dir(session_id: int) -> Path:
+    """Directory for the raw, unmodified bytes of each assignment upload."""
+    p = assignment_dir(session_id) / "originals"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -88,6 +99,19 @@ async def save_assignment_file(session_id: int, filename: str, data: bytes) -> s
     async with aiofiles.open(dest, "wb") as f:
         await f.write(data)
     logger.info("Saved assignment file: %s", dest)
+    return relative_path(dest)
+
+
+async def save_original_upload_file(session_id: int, filename: str, data: bytes) -> str:
+    """
+    Persist the raw, byte-for-byte bytes of one assignment upload event,
+    separate from whatever gets extracted from it internally.
+    Returns the relative path stored in the DB.
+    """
+    dest = assignment_originals_dir(session_id) / _safe_filename(filename)
+    async with aiofiles.open(dest, "wb") as f:
+        await f.write(data)
+    logger.info("Saved original assignment upload: %s", dest)
     return relative_path(dest)
 
 
