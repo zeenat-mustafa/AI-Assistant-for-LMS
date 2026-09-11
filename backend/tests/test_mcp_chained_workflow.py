@@ -103,7 +103,10 @@ def chain_db(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.evaluator.call_gemini_for_evaluation",
-        lambda _prompt: json.dumps({"criteria": _EVAL_CRITERIA}),
+        lambda _prompt: json.dumps({
+            "criteria": _EVAL_CRITERIA,
+            "summary": "You did solid work overall on this assignment.",
+        }),
     )
 
     yield db

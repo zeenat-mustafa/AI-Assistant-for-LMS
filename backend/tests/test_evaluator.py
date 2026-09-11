@@ -206,6 +206,18 @@ def test_build_evaluation_prompt():
     assert "ONLY valid JSON" in prompt
 
 
+def test_build_evaluation_prompt_includes_locked_summary_instruction():
+    """The exact locked wording must appear verbatim -- not paraphrased."""
+    rubric = {"criteria": [{"criterion": "Model Accuracy", "points_possible": 10.0}]}
+    prompt = build_evaluation_prompt(rubric, [], [])
+    assert (
+        "Additionally, write one short paragraph (3-5 sentences) summarizing the "
+        "student's overall performance across the whole submission — what they did "
+        "well, what they missed, and why — in a warm but honest tone."
+    ) in prompt
+    assert '"summary": str' in prompt
+
+
 # ===========================================================================
 # 2. LLM Calling (now delegates to llm_provider.call_llm)
 # ===========================================================================
@@ -253,7 +265,8 @@ def test_parse_evaluation_response_clean_json():
                 "points_awarded": 6.5,
                 "explanation": "Trained accurately with high F1 score.",
             },
-        ]
+        ],
+        "summary": "You handled most of the pipeline well, with strong model training results overall.",
     })
     parsed = parse_evaluation_response(raw_json, rubric)
 
@@ -263,6 +276,7 @@ def test_parse_evaluation_response_clean_json():
     assert len(parsed["criteria"]) == 2
     assert parsed["criteria"][0]["points_awarded"] == 2.5
     assert parsed["criteria"][1]["points_awarded"] == 6.5
+    assert "summary" in parsed and parsed["summary"]
 
 
 def test_parse_evaluation_response_rounds_awards_and_total_to_half_points():
@@ -270,10 +284,13 @@ def test_parse_evaluation_response_rounds_awards_and_total_to_half_points():
         {"criterion": "A", "points_possible": 5.0},
         {"criterion": "B", "points_possible": 5.0},
     ]}
-    raw = json.dumps({"criteria": [
-        {"criterion": "A", "points_awarded": 2.26, "explanation": "x"},
-        {"criterion": "B", "points_awarded": 4.74, "explanation": "y"},
-    ]})
+    raw = json.dumps({
+        "criteria": [
+            {"criterion": "A", "points_awarded": 2.26, "explanation": "x"},
+            {"criterion": "B", "points_awarded": 4.74, "explanation": "y"},
+        ],
+        "summary": "A reasonably solid attempt overall, with room to improve on precision in a couple of spots.",
+    })
     parsed = parse_evaluation_response(raw, rubric)
     assert parsed["valid"] is True
     assert [row["points_awarded"] for row in parsed["criteria"]] == [2.5, 4.5]
@@ -291,7 +308,8 @@ def test_parse_evaluation_response_with_markdown_fences():
         "{\n"
         '  "criteria": [\n'
         '    {"criterion": "Task 1", "points_possible": 10.0, "points_awarded": 8.0, "explanation": "Well done."}\n'
-        "  ]\n"
+        "  ],\n"
+        '  "summary": "You did a great job on Task 1 overall, with only minor room for improvement."\n'
         "}\n"
         "```"
     )
@@ -325,7 +343,8 @@ def test_parse_evaluation_response_points_clamped_if_gemini_overshoots():
                 "points_awarded": 9.5,
                 "explanation": "Outstanding accuracy.",
             },
-        ]
+        ],
+        "summary": "Outstanding work across the board, exceeding expectations on both cleaning and accuracy.",
     })
     parsed = parse_evaluation_response(raw_json, rubric)
 
@@ -350,7 +369,8 @@ def test_parse_evaluation_response_points_clamped_if_negative():
                 "points_awarded": -3.0,
                 "explanation": "Failed tests completely.",
             },
-        ]
+        ],
+        "summary": "Unfortunately the unit tests did not pass this time, so there is significant work left to do here.",
     })
     parsed = parse_evaluation_response(raw_json, rubric)
 
@@ -370,7 +390,8 @@ def test_parse_evaluation_response_total_score_clamped_to_10():
         "criteria": [
             {"criterion": "Part A", "points_possible": 6.0, "points_awarded": 6.0, "explanation": "A"},
             {"criterion": "Part B", "points_possible": 6.0, "points_awarded": 6.0, "explanation": "B"},
-        ]
+        ],
+        "summary": "You aced both parts of this assignment with flying colors, nice work.",
     })
     parsed = parse_evaluation_response(raw_json, rubric)
 
@@ -389,12 +410,77 @@ def test_parse_evaluation_response_criteria_count_mismatch():
     raw_json = json.dumps({
         "criteria": [
             {"criterion": "C1", "points_possible": 5.0, "points_awarded": 4.0, "explanation": "Good"},
-        ]
+        ],
+        "summary": "A decent start, though only one of the two criteria was addressed.",
     })
     parsed = parse_evaluation_response(raw_json, rubric)
 
     assert parsed["valid"] is False
     assert "count mismatch" in parsed["error"]
+
+
+def test_parse_evaluation_response_missing_summary_invalid():
+    rubric = {"criteria": [{"criterion": "C1", "points_possible": 10.0}]}
+    raw_json = json.dumps({
+        "criteria": [
+            {"criterion": "C1", "points_possible": 10.0, "points_awarded": 10.0, "explanation": "Great"},
+        ]
+    })
+    parsed = parse_evaluation_response(raw_json, rubric)
+    assert parsed["valid"] is False
+    assert "summary" in parsed["error"].lower()
+
+
+def test_parse_evaluation_response_empty_summary_invalid():
+    rubric = {"criteria": [{"criterion": "C1", "points_possible": 10.0}]}
+    raw_json = json.dumps({
+        "criteria": [
+            {"criterion": "C1", "points_possible": 10.0, "points_awarded": 10.0, "explanation": "Great"},
+        ],
+        "summary": "   ",
+    })
+    parsed = parse_evaluation_response(raw_json, rubric)
+    assert parsed["valid"] is False
+    assert "summary" in parsed["error"].lower()
+
+
+def test_parse_evaluation_response_too_short_summary_invalid():
+    rubric = {"criteria": [{"criterion": "C1", "points_possible": 10.0}]}
+    raw_json = json.dumps({
+        "criteria": [
+            {"criterion": "C1", "points_possible": 10.0, "points_awarded": 10.0, "explanation": "Great"},
+        ],
+        "summary": "Good.",
+    })
+    parsed = parse_evaluation_response(raw_json, rubric)
+    assert parsed["valid"] is False
+    assert "short" in parsed["error"].lower()
+
+
+def test_parse_evaluation_response_too_long_summary_invalid():
+    rubric = {"criteria": [{"criterion": "C1", "points_possible": 10.0}]}
+    raw_json = json.dumps({
+        "criteria": [
+            {"criterion": "C1", "points_possible": 10.0, "points_awarded": 10.0, "explanation": "Great"},
+        ],
+        "summary": "x" * 2001,
+    })
+    parsed = parse_evaluation_response(raw_json, rubric)
+    assert parsed["valid"] is False
+    assert "long" in parsed["error"].lower()
+
+
+def test_parse_evaluation_response_summary_is_trimmed():
+    rubric = {"criteria": [{"criterion": "C1", "points_possible": 10.0}]}
+    raw_json = json.dumps({
+        "criteria": [
+            {"criterion": "C1", "points_possible": 10.0, "points_awarded": 10.0, "explanation": "Great"},
+        ],
+        "summary": "  You did a wonderful job on this assignment overall.  ",
+    })
+    parsed = parse_evaluation_response(raw_json, rubric)
+    assert parsed["valid"] is True
+    assert parsed["summary"] == "You did a wonderful job on this assignment overall."
 
 
 def test_parse_evaluation_response_malformed_json():
@@ -570,7 +656,8 @@ def test_evaluate_submission_file_prompt_flags_inherited_execution(seeded_db):
             {"criterion": "Data Preprocessing", "points_possible": 3.0, "points_awarded": 0.0, "explanation": "x"},
             {"criterion": "Model Training", "points_possible": 4.0, "points_awarded": 0.0, "explanation": "x"},
             {"criterion": "Evaluation and Metrics", "points_possible": 3.0, "points_awarded": 0.0, "explanation": "x"},
-        ]
+        ],
+        "summary": "You did not complete any of the required work in this submission.",
     })
 
     def fake_parse(path):
@@ -604,7 +691,8 @@ def test_evaluate_submission_file_success(seeded_db):
             {"criterion": "Data Preprocessing", "points_possible": 3.0, "points_awarded": 3.0, "explanation": "Cleaned"},
             {"criterion": "Model Training", "points_possible": 4.0, "points_awarded": 3.5, "explanation": "Trained"},
             {"criterion": "Evaluation and Metrics", "points_possible": 3.0, "points_awarded": 2.5, "explanation": "Evaluated"},
-        ]
+        ],
+        "summary": "You did strong work overall, cleaning the data well and training an accurate model.",
     })
 
     with patch("app.services.evaluator.parse_notebook_file", return_value=mock_nb):
@@ -615,6 +703,7 @@ def test_evaluate_submission_file_success(seeded_db):
             assert result["total_score"] == 9.0
             assert len(result["criteria"]) == 3
             assert mock_gemini.call_count == 1
+            assert result["summary"] == "You did strong work overall, cleaning the data well and training an accurate model."
 
 
 def test_evaluate_submission_file_unmatched_returns_error_immediately(seeded_db):
@@ -653,7 +742,8 @@ def test_evaluate_submission_file_rubric_autogenerated_on_the_fly(seeded_db):
         "criteria": [
             {"criterion": "Criterion A", "points_possible": 5.0, "points_awarded": 4.5, "explanation": "Good"},
             {"criterion": "Criterion B", "points_possible": 5.0, "points_awarded": 4.0, "explanation": "Solid"},
-        ]
+        ],
+        "summary": "A solid submission overall, with good work on both criteria.",
     })
 
     with patch(

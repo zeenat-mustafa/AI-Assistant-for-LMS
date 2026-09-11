@@ -197,6 +197,12 @@ export interface GradeRead {
   feedback_text: string;
   /** null when `rationale_json` was absent or malformed. */
   rationale: RationaleEntry[] | null;
+  /**
+   * Short personalized overall-performance paragraph, from the same
+   * evaluation call as score/rationale (no second LLM call). null for
+   * grades produced before this field existed -- never fabricated.
+   */
+  summary: string | null;
   graded_at: string;
   /**
    * Display name of the instructor who triggered this grading run. null

@@ -379,3 +379,31 @@ class TestGradeAveragingFairness:
         data = res.json()
         assert data["per_file"] == []
         assert data["combined_score"] is None
+
+    # ── Historical grade with no summary (predates the summary field) ──────
+
+    def test_grade_with_null_summary_serializes_cleanly(self, client, db):
+        """A Grade row with summary=None (every row created before this field
+        existed) must serialize as summary: null, not error or fabricate text."""
+        c, instr_token, _tokens = client
+        submission = Submission(
+            id=102, session_id=10, student_id=2,
+            original_filename="a.zip", uploaded_file_path="10/submissions/2/a.zip",
+        )
+        db.add(submission)
+        db.commit()
+        # _add_graded_submission_file never sets summary -> defaults to None.
+        _add_graded_submission_file(
+            db, submission_id=102, matched_unsolved_file_id=1,
+            filename="hw1.ipynb", score=7.0,
+        )
+
+        res = c.get(
+            "/api/v1/sessions/10/grades/2",
+            headers={"Authorization": f"Bearer {instr_token}"},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data["per_file"]) == 1
+        assert data["per_file"][0]["summary"] is None
+        assert data["per_file"][0]["score"] == 7.0

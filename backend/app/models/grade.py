@@ -16,7 +16,17 @@ class Grade(Base):
                       [{"criterion": str, "points_possible": float,
                         "points_awarded": float, "explanation": str}, ...]
                       Persisted cheaply here now; the "why did I get this score"
-                      chatbot query is an Extended Goal (Section 10).
+                      chatbot query is an Extended Goal (Section 10). Still
+                      generated and stored on every grade exactly as before —
+                      only the student's own-grades view stopped rendering it
+                      directly, in favor of `summary` below.
+    summary         — one short personalized paragraph (3-5 sentences) from
+                      the SAME evaluation call as everything else above (no
+                      second LLM call), synthesizing overall performance
+                      across the whole submission. Nullable: grades created
+                      before this field existed have none, and none is ever
+                      fabricated for them — display falls back to the
+                      pre-existing rationale/feedback_text rendering instead.
     graded_by_instructor_id — who triggered this grading run. Nullable: the
                       MCP grading tools have no auth layer and so genuinely
                       cannot determine a triggering instructor (left null
@@ -42,6 +52,9 @@ class Grade(Base):
     feedback_text: Mapped[str] = mapped_column(Text, nullable=False)
     # Full JSON blob — criterion-level breakdown.
     rationale_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Short personalized overall-performance paragraph, from the same
+    # evaluation call as everything else. Nullable — historical grades have none.
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     graded_by_instructor_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )

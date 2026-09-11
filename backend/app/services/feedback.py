@@ -202,6 +202,10 @@ def persist_grade(
     feedback_text = build_feedback_text(evaluation_result)
     rationale_list = build_rationale_json(evaluation_result)
     rationale_json_str = json.dumps(rationale_list)
+    # From the SAME evaluation call as everything else above — no second LLM
+    # call. Historical callers/tests that don't supply one simply get None,
+    # matching the nullable column; never fabricated.
+    summary = evaluation_result.get("summary") or None
 
     score = float(evaluation_result.get("total_score", 0.0))
     now = datetime.now(timezone.utc)
@@ -222,6 +226,7 @@ def persist_grade(
         existing.score = score
         existing.feedback_text = feedback_text
         existing.rationale_json = rationale_json_str
+        existing.summary = summary
         existing.graded_at = now
         existing.graded_by_instructor_id = graded_by_instructor_id
         grade = existing
@@ -231,6 +236,7 @@ def persist_grade(
             score=score,
             feedback_text=feedback_text,
             rationale_json=rationale_json_str,
+            summary=summary,
             graded_at=now,
             graded_by_instructor_id=graded_by_instructor_id,
         )

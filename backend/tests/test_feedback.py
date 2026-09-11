@@ -466,7 +466,8 @@ class TestGenerateFeedbackAndPersist:
                 {"criterion": "Data Preprocessing", "points_possible": 3.0, "points_awarded": 3.0, "explanation": "Clean"},
                 {"criterion": "Model Training", "points_possible": 4.0, "points_awarded": 4.0, "explanation": "Trained"},
                 {"criterion": "Evaluation and Metrics", "points_possible": 3.0, "points_awarded": 3.0, "explanation": "Evaluated"},
-            ]
+            ],
+            "summary": "You did excellent work across every part of this assignment, well done.",
         })
 
         with patch("app.services.evaluator.parse_notebook_file", return_value=mock_nb):
@@ -482,6 +483,7 @@ class TestGenerateFeedbackAndPersist:
         grade = seeded_db.query(Grade).filter(Grade.submission_file_id == 300).first()
         assert grade is not None
         assert grade.score == 10.0
+        assert grade.summary == "You did excellent work across every part of this assignment, well done."
 
     def test_threads_graded_by_instructor_id_through_to_the_grade_row(self, seeded_db):
         """
@@ -498,7 +500,8 @@ class TestGenerateFeedbackAndPersist:
                 {"criterion": "Data Preprocessing", "points_possible": 3.0, "points_awarded": 3.0, "explanation": "Clean"},
                 {"criterion": "Model Training", "points_possible": 4.0, "points_awarded": 4.0, "explanation": "Trained"},
                 {"criterion": "Evaluation and Metrics", "points_possible": 3.0, "points_awarded": 3.0, "explanation": "Evaluated"},
-            ]
+            ],
+            "summary": "You did excellent work across every part of this assignment, well done.",
         })
 
         with patch("app.services.evaluator.parse_notebook_file", return_value=mock_nb):
@@ -552,7 +555,8 @@ class TestGenerateFeedbackAndPersist:
                 {"criterion": "Data Preprocessing", "points_possible": 3.0, "points_awarded": 2.5, "explanation": "ok"},
                 {"criterion": "Model Training", "points_possible": 4.0, "points_awarded": 3.5, "explanation": "ok"},
                 {"criterion": "Evaluation and Metrics", "points_possible": 3.0, "points_awarded": 2.5, "explanation": "ok"},
-            ]
+            ],
+            "summary": "A solid effort overall, with a bit more polish needed on model training.",
         })
 
         with patch("app.services.evaluator.parse_notebook_file", return_value=mock_nb):

@@ -294,7 +294,10 @@ def test_grade_session_matches_rest_batch_endpoint_exactly(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.evaluator.call_gemini_for_evaluation",
-        lambda _prompt: json.dumps({"criteria": _CRITERIA}),
+        lambda _prompt: json.dumps({
+            "criteria": _CRITERIA,
+            "summary": "You did well overall, handling most of the assignment correctly.",
+        }),
     )
 
     mcp_engine, mcp_db = _fresh_db()

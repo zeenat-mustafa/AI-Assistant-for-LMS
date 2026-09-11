@@ -9,18 +9,23 @@
  * display the moment a re-upload destroys the grades, which is trivial when
  * both live on one page and awkward across two.
  *
- * Two rules from earlier sub-features apply here and are load-bearing:
+ * Rules from earlier sub-features apply here and are load-bearing:
  *
  * 1. `combined_score` is 0.0 both for a genuine zero AND for an ungraded
  *    submitter, so it is NEVER used to decide grading status. Presence in
  *    `per_file` is the signal, exactly as 5.4 resolved it instructor-side.
- * 2. `GradeRead.rationale` (the structured criterion breakdown) IS returned
- *    by this endpoint and, as of bugfix-structured-rationale-display, IS the
- *    primary detail rendered per file (via the shared `GradeFileRow`) --
- *    `feedback_text` is now only a fallback for when `rationale` is missing.
+ * 2. `GradeRead.rationale` (the structured criterion breakdown) is still
+ *    generated and stored exactly as before (reserved for a future "why did
+ *    I get this grade" chatbot), but this view no longer renders it
+ *    directly. (feature-grade-summary) Per graded file: if `grade.summary`
+ *    is present, show ONLY that short paragraph (no per-criterion cards, no
+ *    expand/collapse) via `SummaryOnlyRow` below. If `summary` is null (a
+ *    grade from before this field existed), fall back to the exact same
+ *    `GradeFileRow` this view always used, unchanged -- never a blank
+ *    screen for historical grades.
  */
 
-import type { GradeSummary, SubmissionRead } from "@/lib/api";
+import type { GradeRead, GradeSummary, SubmissionRead } from "@/lib/api";
 import { EmptyState, FormError, Loading, Panel } from "@/components/ui";
 import { GradeFileRow } from "@/components/grade-file-row";
 
@@ -74,14 +79,18 @@ export function MyGradesPanel({
           ) : null}
 
           {/*
-            Summary first: the combined score above stays the headline, and
-            each file collapses to filename + score until asked to open. The
-            detail is unchanged, only hidden by default.
+            The combined score above stays the headline. Per file: a summary
+            paragraph when one exists, or the pre-existing collapsible
+            filename+score breakdown as a fallback for historical grades.
           */}
           <ul className="divide-y divide-slate-100">
-            {gradedFiles.map((grade) => (
-              <GradeFileRow key={grade.id} grade={grade} />
-            ))}
+            {gradedFiles.map((grade) =>
+              grade.summary ? (
+                <SummaryOnlyRow key={grade.id} grade={grade} />
+              ) : (
+                <GradeFileRow key={grade.id} grade={grade} />
+              ),
+            )}
           </ul>
 
           {gradedFiles.length < totalAssignmentFiles ? (
@@ -94,5 +103,27 @@ export function MyGradesPanel({
         </>
       )}
     </Panel>
+  );
+}
+
+/**
+ * One graded file, student view, when a `summary` exists: filename + score,
+ * and the summary paragraph -- no per-criterion cards, no expand/collapse.
+ * The structured `rationale` for this grade is still fetched and stored
+ * server-side; this row just never renders it (see file header).
+ */
+function SummaryOnlyRow({ grade }: { grade: GradeRead }) {
+  return (
+    <li className="py-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="truncate text-sm font-medium text-slate-900">
+          {grade.original_filename}
+        </span>
+        <span className="shrink-0 text-sm font-medium tabular-nums text-slate-900">
+          {grade.score} / 10
+        </span>
+      </div>
+      <p className="mt-1 text-sm text-slate-700">{grade.summary}</p>
+    </li>
   );
 }
