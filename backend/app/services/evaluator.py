@@ -522,6 +522,8 @@ def evaluate_submission_file(db: Session, submission_file_id: int) -> dict[str, 
             execution_provenance_summary=_execution_provenance_summary(provenance_stats),
         )
 
+        session_id = sub_file.submission.session_id
+
         try:
             raw_eval_response = call_gemini_for_evaluation(prompt)
         except EvaluationError as exc:
@@ -531,11 +533,49 @@ def evaluate_submission_file(db: Session, submission_file_id: int) -> dict[str, 
             }
 
         parsed_eval = parse_evaluation_response(raw_eval_response, rubric)
-        if not parsed_eval["valid"]:
-            return {
-                "success": False,
-                "error": parsed_eval["error"] or "Failed to parse Gemini evaluation response.",
-            }
+
+        # A malformed structured-output response (bad JSON, wrong shape,
+        # missing fields) is a known intermittent LLM failure mode, not a
+        # legitimate content judgment about the submission — parse_evaluation_
+        # response never returns valid: False for any other reason. Retry the
+        # same call up to MAX_MALFORMED_RETRIES times before giving up; a file
+        # that still fails after retries is returned exactly as before, so it
+        # still flows through the existing "skip and flag, never force-grade"
+        # batch behavior in grading_pipeline.py unchanged.
+        MAX_MALFORMED_RETRIES = 2
+        attempt = 0
+        while not parsed_eval["valid"]:
+            logger.error(
+                "evaluate_submission_file: malformed Gemini response for "
+                "submission_file %d (session %d), attempt %d/%d — %s. "
+                "Raw response:\n%s",
+                submission_file_id, session_id, attempt + 1,
+                MAX_MALFORMED_RETRIES + 1, parsed_eval["error"], raw_eval_response,
+            )
+            if attempt >= MAX_MALFORMED_RETRIES:
+                logger.error(
+                    "evaluate_submission_file: giving up on submission_file %d "
+                    "(session %d) after %d attempt(s) — skipping and flagging.",
+                    submission_file_id, session_id, attempt + 1,
+                )
+                return {
+                    "success": False,
+                    "error": parsed_eval["error"] or "Failed to parse Gemini evaluation response.",
+                }
+            attempt += 1
+            logger.warning(
+                "evaluate_submission_file: retrying submission_file %d "
+                "(session %d) after malformed response — attempt %d/%d.",
+                submission_file_id, session_id, attempt, MAX_MALFORMED_RETRIES,
+            )
+            try:
+                raw_eval_response = call_gemini_for_evaluation(prompt)
+            except EvaluationError as exc:
+                return {
+                    "success": False,
+                    "error": str(exc),
+                }
+            parsed_eval = parse_evaluation_response(raw_eval_response, rubric)
 
         logger.info(
             "Successfully evaluated submission_file %d: score %.2f/10 across %d criteria.",
