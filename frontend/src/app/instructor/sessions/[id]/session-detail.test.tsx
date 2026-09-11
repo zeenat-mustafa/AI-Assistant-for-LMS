@@ -65,6 +65,7 @@ vi.mock("@/lib/auth/auth-context", async (importOriginal) => {
 });
 
 import { SessionDetail, describeUpload } from "./session-detail";
+import { GradingAnnouncementProvider, useGradingAnnouncements } from "@/lib/grading-announcements";
 
 function uploaded(overrides: Partial<AssignmentUploadRead> = {}): AssignmentUploadRead {
   return {
@@ -299,6 +300,81 @@ describe("<SessionDetail /> — download and remove", () => {
 
     expect(deleteAssignmentMock).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: /^remove$/i })).toBeInTheDocument();
+  });
+});
+
+describe("<SessionDetail /> — auto-refresh after a grading announcement", () => {
+  // The floating widget only ever announces the raw summary message -- it
+  // has no idea a session page is mounted. This harness stands in for the
+  // widget, letting tests trigger that announcement directly.
+  function Harness({ sessionId }: { sessionId: number }) {
+    const { announceGradingCompletion } = useGradingAnnouncements();
+    return (
+      <>
+        <button onClick={() => announceGradingCompletion("Graded 1 of 1 submission in Week 3 Day 1.")}>
+          announce-match
+        </button>
+        <button onClick={() => announceGradingCompletion("Graded 1 of 1 submission in Week 5 Day 2.")}>
+          announce-mismatch
+        </button>
+        <SessionDetail sessionId={sessionId} />
+      </>
+    );
+  }
+
+  async function renderWithHarness() {
+    render(
+      <GradingAnnouncementProvider>
+        <Harness sessionId={5} />
+      </GradingAnnouncementProvider>,
+    );
+    await screen.findByRole("heading", { name: "Week 3 Day 1" });
+  }
+
+  it("refetches the roster when the announced run names this session", async () => {
+    await renderWithHarness();
+    expect(getGradeReportMock).toHaveBeenCalledTimes(1);
+
+    getGradeReportMock.mockResolvedValue({
+      session_id: 5,
+      session_title: "Week 3 Day 1",
+      students: [
+        {
+          student_id: 9,
+          student_name: "Fiza",
+          combined_score: 8.5,
+          per_file: [
+            {
+              id: 1,
+              submission_file_id: 1,
+              original_filename: "a.ipynb",
+              score: 8.5,
+              feedback_text: "Good work.",
+              rationale: null,
+              summary: null,
+              graded_at: "2026-09-12T10:00:00.000000",
+              graded_by_name: "Demo Instructor",
+            },
+          ],
+        },
+      ],
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "announce-match" }));
+
+    await waitFor(() => expect(getGradeReportMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Fiza")).toBeInTheDocument();
+  });
+
+  it("does not refetch when the announced run names a different session", async () => {
+    await renderWithHarness();
+    expect(getGradeReportMock).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "announce-mismatch" }));
+
+    // Nothing to await on, so give any accidental async refetch a tick to fire.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(getGradeReportMock).toHaveBeenCalledTimes(1);
   });
 });
 

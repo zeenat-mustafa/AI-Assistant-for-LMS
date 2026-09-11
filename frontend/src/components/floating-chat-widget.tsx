@@ -19,7 +19,19 @@
  * always name the session in what they type, exactly as if editing the old
  * prefill away by hand. The "did this run target the page I'm on" tracking
  * (summaryNamesSession/ranElsewhere/onGraded) went away for the same reason:
- * there is no longer a "this page's session" to compare against.
+ * there is no longer a "this page's session" to compare against here -- but
+ * see "Announcing completion" below, which restores it for whichever page
+ * is actually mounted.
+ *
+ * Announcing completion
+ * ----------------------
+ * On every `summary` event this widget calls announceGradingCompletion with
+ * the raw conversational message (lib/grading-announcements.tsx). That is
+ * the full extent of its involvement -- it does not know whether a session
+ * page is mounted, or which one, or compare anything itself. Whichever
+ * session-detail page happens to be listening runs its own
+ * summaryNamesSession check and decides whether to refetch. This keeps the
+ * widget exactly as page-agnostic as before.
  *
  * No persistence
  * ---------------
@@ -41,6 +53,7 @@ import type { ChatEarlyExit, GradingEvent, GradingSummaryEvent } from "@/lib/api
 import { useAuth } from "@/lib/auth/auth-context";
 import { SubmitButton } from "@/components/ui";
 import { GENERIC_FAILURE_FALLBACK, safeChatText } from "@/lib/chat-safety";
+import { useGradingAnnouncements } from "@/lib/grading-announcements";
 
 interface Turn {
   id: number;
@@ -91,6 +104,7 @@ function ChatPanel({ onClose }: { onClose: () => void }) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [instruction, setInstruction] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const { announceGradingCompletion } = useGradingAnnouncements();
 
   const nextId = useRef(1);
   const abortRef = useRef<AbortController | null>(null);
@@ -148,6 +162,10 @@ function ChatPanel({ onClose }: { onClose: () => void }) {
         }
         if (event.event === "summary") {
           patch(id, { summary: event });
+          // The message is the only signal of which session a run targeted
+          // (see the module docstring) -- announce it as-is and let whichever
+          // session-detail page is mounted decide if it applies to them.
+          if (event.message) announceGradingCompletion(event.message);
           continue;
         }
         // checking / graded / failed -- appended one at a time so the list
