@@ -2,7 +2,7 @@ Phase 4 — Known Gaps Record
 ============================
 Gaps accepted by design during Phase 4 sub-features. Not bugs — do not "fix"
 without being asked. See CLAUDE.md's "Known gaps" section for the Phase 1/2
-equivalents, and phase3-known-gaps-record.txt for Phase 3's.
+equivalents, and docs/phase3-known-gaps-record.txt for Phase 3's.
 
 Sub-feature 4.6 (chained workflow verification)
 ------------------------------------------------------------------------

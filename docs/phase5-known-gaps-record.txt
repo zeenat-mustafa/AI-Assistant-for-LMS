@@ -2,8 +2,8 @@ Phase 5 — Known Gaps Record
 ============================
 Gaps accepted by design during Phase 5 (Next.js frontend) sub-features. Not
 bugs — do not "fix" without being asked. See CLAUDE.md's "Known gaps" section
-for the Phase 1/2 equivalents, phase3-known-gaps-record.txt for Phase 3's, and
-phase4-known-gaps-record.txt for Phase 4's.
+for the Phase 1/2 equivalents, docs/phase3-known-gaps-record.txt for Phase 3's, and
+docs/phase4-known-gaps-record.txt for Phase 4's.
 
 Note on scope: Phase 5 is a thin UI over the existing API. Several entries
 below are backend limitations the frontend SURFACES rather than works around —

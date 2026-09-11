@@ -196,7 +196,7 @@ describe("<GradesRoster />", () => {
 
   it("no longer shows the zero-submission footnote on either the empty or populated table", () => {
     // bugfix-roster-footnote: the limitation is real (see
-    // phase5-known-gaps-record.txt) but the on-screen footnote describing it
+    // docs/phase5-known-gaps-record.txt) but the on-screen footnote describing it
     // was removed as UI cleanup -- this pins its absence in both states it
     // used to appear in.
     const { rerender } = render(
