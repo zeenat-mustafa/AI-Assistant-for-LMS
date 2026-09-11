@@ -38,18 +38,40 @@ function report(students: GradeSummary[]): SessionGradeReport {
 
 describe("<GradesRoster />", () => {
   it("shows a loading state before the report arrives", () => {
-    render(<GradesRoster report={null} error={null} totalAssignmentFiles={4} />);
+    render(
+      <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
+        report={null}
+        error={null}
+        totalAssignmentFiles={4}
+      />,
+    );
     expect(screen.getByText(/loading grades/i)).toBeInTheDocument();
   });
 
   it("shows an empty state when nobody has submitted", () => {
-    render(<GradesRoster report={report([])} error={null} totalAssignmentFiles={4} />);
+    render(
+      <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
+        report={report([])}
+        error={null}
+        totalAssignmentFiles={4}
+      />,
+    );
     expect(screen.getByText(/no submissions for this session yet/i)).toBeInTheDocument();
   });
 
   it("surfaces a load failure", () => {
     render(
-      <GradesRoster report={null} error="Session 5 not found." totalAssignmentFiles={4} />,
+      <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
+        report={null}
+        error="Session 5 not found."
+        totalAssignmentFiles={4}
+      />,
     );
     expect(screen.getByRole("alert")).toHaveTextContent("Session 5 not found.");
   });
@@ -57,6 +79,8 @@ describe("<GradesRoster />", () => {
   it("renders each student with their combined score and graded count", () => {
     render(
       <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
         report={report([
           student({ student_id: 2, student_name: "Fiza", combined_score: 9 }),
           student({
@@ -86,6 +110,8 @@ describe("<GradesRoster />", () => {
     // read as a genuine zero.
     render(
       <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
         report={report([student({ student_name: "Nami", per_file: [], combined_score: 0 })])}
         error={null}
         totalAssignmentFiles={4}
@@ -96,12 +122,14 @@ describe("<GradesRoster />", () => {
     expect(screen.queryByText("0 / 10")).not.toBeInTheDocument();
     expect(screen.getByText("0 of 4 files graded")).toBeInTheDocument();
     // Nothing to expand.
-    expect(screen.queryByRole("button", { name: /show files/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /show details/i })).not.toBeInTheDocument();
   });
 
   it("handles the null combined_score case (session with no assignment files)", () => {
     render(
       <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
         report={report([student({ per_file: [], combined_score: null })])}
         error={null}
         totalAssignmentFiles={0}
@@ -113,6 +141,8 @@ describe("<GradesRoster />", () => {
   it("expands to a per-file breakdown with scores and feedback", async () => {
     render(
       <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
         report={report([
           student({
             per_file: [
@@ -133,7 +163,7 @@ describe("<GradesRoster />", () => {
 
     expect(screen.queryByText("a.ipynb")).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /show files/i }));
+    await userEvent.click(screen.getByRole("button", { name: /show details/i }));
 
     expect(screen.getByText("a.ipynb")).toBeInTheDocument();
     expect(screen.getByText("8.5 / 10")).toBeInTheDocument();
@@ -143,7 +173,7 @@ describe("<GradesRoster />", () => {
     // toggle, so it is present but not visible until that file is opened.
     expect(screen.getByText("Missing the plotting step.")).not.toBeVisible();
 
-    await userEvent.click(screen.getByRole("button", { name: /hide files/i }));
+    await userEvent.click(screen.getByRole("button", { name: /hide details/i }));
     expect(screen.queryByText("a.ipynb")).not.toBeInTheDocument();
   });
 
@@ -152,6 +182,8 @@ describe("<GradesRoster />", () => {
     // student's own-grades view, so this pins the roster side of the wiring.
     render(
       <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
         report={report([
           student({
             per_file: [
@@ -181,7 +213,7 @@ describe("<GradesRoster />", () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: /show files/i }));
+    await userEvent.click(screen.getByRole("button", { name: /show details/i }));
 
     expect(screen.getByText("Correctness")).toBeInTheDocument();
     expect(screen.getByText("5 / 6")).toBeInTheDocument();
@@ -200,14 +232,26 @@ describe("<GradesRoster />", () => {
     // was removed as UI cleanup -- this pins its absence in both states it
     // used to appear in.
     const { rerender } = render(
-      <GradesRoster report={report([])} error={null} totalAssignmentFiles={4} />,
+      <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
+        report={report([])}
+        error={null}
+        totalAssignmentFiles={4}
+      />,
     );
     expect(
       screen.queryByText(/only students with at least one submission appear here/i),
     ).not.toBeInTheDocument();
 
     rerender(
-      <GradesRoster report={report([student()])} error={null} totalAssignmentFiles={4} />,
+      <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
+        report={report([student()])}
+        error={null}
+        totalAssignmentFiles={4}
+      />,
     );
     expect(
       screen.queryByText(/only students with at least one submission appear here/i),
@@ -217,6 +261,8 @@ describe("<GradesRoster />", () => {
   it("uses singular wording for a one-file session", () => {
     render(
       <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
         report={report([student({ per_file: [] })])}
         error={null}
         totalAssignmentFiles={1}
@@ -228,6 +274,8 @@ describe("<GradesRoster />", () => {
   it("keeps each student's expansion independent", async () => {
     render(
       <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
         report={report([
           student({ student_id: 2, student_name: "Fiza", per_file: [grade({ id: 1, original_filename: "fiza.ipynb" })] }),
           student({ student_id: 3, student_name: "Soph", per_file: [grade({ id: 2, original_filename: "soph.ipynb" })] }),
@@ -238,7 +286,7 @@ describe("<GradesRoster />", () => {
     );
 
     const fizaRow = screen.getByText("Fiza").closest("li")!;
-    await userEvent.click(within(fizaRow).getByRole("button", { name: /show files/i }));
+    await userEvent.click(within(fizaRow).getByRole("button", { name: /show details/i }));
 
     expect(screen.getByText("fiza.ipynb")).toBeInTheDocument();
     expect(screen.queryByText("soph.ipynb")).not.toBeInTheDocument();
@@ -264,8 +312,16 @@ describe("<GradesRoster /> — collapsible per-file detail", () => {
 
   /** Expand the student so their file rows are on screen. */
   async function showFiles() {
-    render(<GradesRoster report={TWO_FILES} error={null} totalAssignmentFiles={2} />);
-    await userEvent.click(screen.getByRole("button", { name: /show files/i }));
+    render(
+      <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
+        report={TWO_FILES}
+        error={null}
+        totalAssignmentFiles={2}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /show details/i }));
   }
 
   it("keeps the combined score prominent on the student row", async () => {
@@ -288,6 +344,8 @@ describe("<GradesRoster /> — collapsible per-file detail", () => {
   it("shows the Graded by line when the grade has attribution", async () => {
     render(
       <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
         report={report([
           student({
             per_file: [
@@ -303,7 +361,7 @@ describe("<GradesRoster /> — collapsible per-file detail", () => {
         totalAssignmentFiles={1}
       />,
     );
-    await userEvent.click(screen.getByRole("button", { name: /show files/i }));
+    await userEvent.click(screen.getByRole("button", { name: /show details/i }));
     await userEvent.click(screen.getByRole("button", { name: /a\.ipynb/ }));
 
     expect(screen.getByText("Graded by Demo Instructor 2")).toBeVisible();
@@ -312,6 +370,8 @@ describe("<GradesRoster /> — collapsible per-file detail", () => {
   it("omits the Graded by line for a grade with no attribution, not 'Graded by null'", async () => {
     render(
       <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
         report={report([
           student({
             per_file: [
@@ -323,7 +383,7 @@ describe("<GradesRoster /> — collapsible per-file detail", () => {
         totalAssignmentFiles={1}
       />,
     );
-    await userEvent.click(screen.getByRole("button", { name: /show files/i }));
+    await userEvent.click(screen.getByRole("button", { name: /show details/i }));
     await userEvent.click(screen.getByRole("button", { name: /a\.ipynb/ }));
 
     expect(screen.queryByText(/graded by/i)).not.toBeInTheDocument();
@@ -349,6 +409,8 @@ describe("<GradesRoster /> — collapsible per-file detail", () => {
   it("shows a genuine zero as a score in the collapsed row", async () => {
     render(
       <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
         report={report([
           student({
             student_name: "Nami",
@@ -365,7 +427,7 @@ describe("<GradesRoster /> — collapsible per-file detail", () => {
     expect(screen.getByText("0 / 10")).toBeVisible();
     expect(screen.queryByText(/not graded yet/i)).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /show files/i }));
+    await userEvent.click(screen.getByRole("button", { name: /show details/i }));
     expect(screen.getByText("z.ipynb")).toBeVisible();
     expect(screen.getAllByText("0 / 10").length).toBeGreaterThan(0);
   });
@@ -373,6 +435,8 @@ describe("<GradesRoster /> — collapsible per-file detail", () => {
   it("still distinguishes an ungraded submitter, whose 0.0 is not a score", () => {
     render(
       <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
         report={report([
           student({ student_name: "Soph", per_file: [], combined_score: 0 }),
         ])}
@@ -386,6 +450,6 @@ describe("<GradesRoster /> — collapsible per-file detail", () => {
     expect(screen.getByText(/not graded yet/i)).toBeVisible();
     expect(screen.queryByText("0 / 10")).not.toBeInTheDocument();
     // No files to expand, so no toggle at all.
-    expect(screen.queryByRole("button", { name: /show files/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /show details/i })).not.toBeInTheDocument();
   });
 });

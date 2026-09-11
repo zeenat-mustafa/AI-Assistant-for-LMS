@@ -93,11 +93,11 @@ describe("apiFetch — request building", () => {
   it("leaves Content-Type unset for FormData so the browser adds the boundary", async () => {
     const fetchMock = mockJson({ id: 1, session_id: 1, student_id: 2, files: [] });
     const file = new File(["{}"], "solved.ipynb", { type: "application/json" });
-    await uploadSubmission(1, file, { token: "t" });
+    await uploadSubmission(1, [file], { token: "t" });
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     expect((init.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
     expect(init.body).toBeInstanceOf(FormData);
-    expect((init.body as FormData).get("file")).toBeInstanceOf(File);
+    expect((init.body as FormData).get("files")).toBeInstanceOf(File);
   });
 });
 

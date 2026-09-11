@@ -28,7 +28,9 @@ import Link from "next/link";
 
 import {
   ApiError,
+  deleteSubmissionUpload,
   downloadAssignment,
+  downloadMySubmissionUpload,
   getMyGrades,
   getMySubmission,
   getSession,
@@ -119,10 +121,18 @@ function StudentSessionBody({ sessionId }: { sessionId: number }) {
   const [grades, setGrades] = useState<GradeSummary | undefined>(undefined);
   const [gradesError, setGradesError] = useState<string | null>(null);
 
-  /**
-   * Re-read grades. Called on mount and after an upload -- a replacement
-   * deletes the previous grades, so the old display must not linger.
-   */
+  /** Re-read the student's own submission -- used after upload and after a per-item delete. */
+  const refreshSubmission = useCallback(async () => {
+    const result = await loadMySubmission(sessionId);
+    if ("error" in result) {
+      setSubmissionError(result.error);
+      return;
+    }
+    setSubmission(result.submission);
+    setSubmissionError(null);
+  }, [sessionId]);
+
+  /** Re-read grades. Called on mount, after an upload, and after a delete that removed a graded file. */
   const refreshGrades = useCallback(async () => {
     const result = await loadMyGrades(sessionId);
     if ("error" in result) {
@@ -204,19 +214,22 @@ function StudentSessionBody({ sessionId }: { sessionId: number }) {
       </div>
 
       <SubmissionStatusPanel
+        sessionId={sessionId}
         submission={submission}
         error={submissionError}
+        onDeleted={async () => {
+          // A delete can remove a graded file (after explicit confirm), so
+          // both the upload list and the grade display need a fresh read.
+          await refreshSubmission();
+          await refreshGrades();
+        }}
       />
 
       <SubmissionUploadPanel
         sessionId={sessionId}
         submission={submission}
-        grades={grades}
-        onUploaded={(created) => {
-          // The replacement already deleted any previous grades, so clear the
-          // stale display immediately, then re-read the real state.
-          setSubmission(created);
-          setGrades(undefined);
+        onUploaded={(updated) => {
+          setSubmission(updated);
           void refreshGrades();
         }}
       />
@@ -244,57 +257,178 @@ function BackLink() {
   );
 }
 
+/**
+ * Lists every SubmissionUpload the student has made (additive, so possibly
+ * many) with a per-item delete control. Delete enforcement is real and
+ * server-side now (a 409 naming the actual score(s) that would be lost when
+ * the upload produced a graded file), not just a client-side guardrail —
+ * the confirm prompt shown here is the backend's own message, verbatim.
+ */
 function SubmissionStatusPanel({
+  sessionId,
   submission,
   error,
+  onDeleted,
 }: {
+  sessionId: number;
   submission: SubmissionRead | null | undefined;
   error: string | null;
+  onDeleted: () => Promise<void>;
 }) {
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [confirmText, setConfirmText] = useState<Record<number, string>>({});
+  const [itemError, setItemError] = useState<Record<number, string>>({});
+  const [downloadBusyId, setDownloadBusyId] = useState<number | null>(null);
+  const [downloadError, setDownloadError] = useState<Record<number, string>>({});
+
+  async function handleDownload(upload: SubmissionRead["uploads"][number]) {
+    setDownloadError((cur) => {
+      const { [upload.id]: _removed, ...rest } = cur;
+      return rest;
+    });
+    setDownloadBusyId(upload.id);
+    try {
+      const blob = await downloadMySubmissionUpload(sessionId, upload.id);
+      triggerBlobDownload(blob, upload.original_filename);
+    } catch (dlError) {
+      setDownloadError((cur) => ({
+        ...cur,
+        [upload.id]:
+          dlError instanceof ApiError ? dlError.detail : `Could not download ${upload.original_filename}.`,
+      }));
+    } finally {
+      setDownloadBusyId(null);
+    }
+  }
+
+  async function handleDelete(uploadId: number, confirm: boolean) {
+    setItemError((cur) => {
+      const { [uploadId]: _removed, ...rest } = cur;
+      return rest;
+    });
+    setBusyId(uploadId);
+    try {
+      await deleteSubmissionUpload(sessionId, uploadId, { confirm });
+      setConfirmText((cur) => {
+        const { [uploadId]: _removed, ...rest } = cur;
+        return rest;
+      });
+      await onDeleted();
+    } catch (deleteError) {
+      if (deleteError instanceof ApiError && deleteError.status === 409) {
+        setConfirmText((cur) => ({ ...cur, [uploadId]: deleteError.detail }));
+      } else {
+        setItemError((cur) => ({
+          ...cur,
+          [uploadId]:
+            deleteError instanceof ApiError
+              ? deleteError.detail
+              : "Could not remove this upload.",
+        }));
+      }
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <Panel title="Your submission">
       {error ? <FormError>{error}</FormError> : null}
 
       {submission === undefined && !error ? (
         <Loading>Checking your submission…</Loading>
-      ) : submission === null ? (
+      ) : submission === null || submission.uploads.length === 0 ? (
         // The normal, expected "nothing yet" case — not a failure.
         <EmptyState>
           You haven&apos;t submitted anything for this session yet.
         </EmptyState>
       ) : submission ? (
         <div>
-          <p className="text-sm font-medium text-slate-900">
-            Submitted <span className="text-slate-500">·</span>{" "}
-            {submission.original_filename}
-          </p>
-          <p className="mt-1 text-xs text-slate-500">
-            Uploaded {formatDate(submission.submitted_at)} · {submission.files.length}{" "}
+          <p className="text-xs text-slate-500">
+            {submission.uploads.length}{" "}
+            {submission.uploads.length === 1 ? "upload" : "uploads"} ·{" "}
+            {submission.files.length}{" "}
             {submission.files.length === 1 ? "notebook" : "notebooks"} ·{" "}
             {submission.files.filter((f) => f.graded).length} graded
           </p>
 
-          {submission.files.length > 0 ? (
-            <ul className="mt-3 divide-y divide-slate-200 border-t border-slate-200">
-              {submission.files.map((file) => (
-                <li
-                  key={file.id}
-                  className="flex items-center justify-between gap-3 py-2"
-                >
-                  <span className="min-w-0 truncate text-xs text-slate-800">
-                    {file.original_filename}
-                  </span>
-                  <span className="shrink-0 text-xs text-slate-500">
-                    {file.matched_unsolved_file_id === null
-                      ? "not matched to an assignment"
-                      : file.graded
-                        ? "graded"
-                        : "awaiting grading"}
-                  </span>
+          <ul className="mt-3 divide-y divide-slate-200 border-t border-slate-200">
+            {submission.uploads.map((upload) => {
+              const producedFiles = submission.files.filter(
+                (f) => f.source_upload_id === upload.id,
+              );
+              return (
+                <li key={upload.id} className="py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-slate-900">
+                        {upload.original_filename}
+                      </span>
+                      <span className="block text-xs text-slate-500">
+                        Uploaded {formatDate(upload.uploaded_at)}
+                        {producedFiles.length > 0
+                          ? ` · ${producedFiles.length} ${producedFiles.length === 1 ? "notebook" : "notebooks"} (${producedFiles.filter((f) => f.graded).length} graded)`
+                          : ""}
+                      </span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      <SmallButton
+                        onClick={() => void handleDownload(upload)}
+                        disabled={downloadBusyId === upload.id}
+                      >
+                        {downloadBusyId === upload.id ? "Downloading…" : "Download"}
+                      </SmallButton>
+                      <SmallButton
+                        tone="danger"
+                        onClick={() => void handleDelete(upload.id, false)}
+                        disabled={busyId === upload.id}
+                      >
+                        {busyId === upload.id ? "Removing…" : "Remove"}
+                      </SmallButton>
+                    </span>
+                  </div>
+
+                  {downloadError[upload.id] ? (
+                    <p className="mt-2 text-xs text-red-600" role="alert">
+                      {downloadError[upload.id]}
+                    </p>
+                  ) : null}
+
+                  {itemError[upload.id] ? (
+                    <p className="mt-2 text-xs text-red-600" role="alert">
+                      {itemError[upload.id]}
+                    </p>
+                  ) : null}
+
+                  {confirmText[upload.id] ? (
+                    <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-3">
+                      <p className="text-sm text-amber-900">{confirmText[upload.id]}</p>
+                      <div className="mt-3 flex items-center gap-2">
+                        <SmallButton
+                          tone="danger"
+                          onClick={() => void handleDelete(upload.id, true)}
+                          disabled={busyId === upload.id}
+                        >
+                          Remove and delete my grade
+                        </SmallButton>
+                        <SmallButton
+                          onClick={() =>
+                            setConfirmText((cur) => {
+                              const { [upload.id]: _removed, ...rest } = cur;
+                              return rest;
+                            })
+                          }
+                          disabled={busyId === upload.id}
+                        >
+                          Cancel
+                        </SmallButton>
+                      </div>
+                    </div>
+                  ) : null}
                 </li>
-              ))}
-            </ul>
-          ) : null}
+              );
+            })}
+          </ul>
         </div>
       ) : null}
     </Panel>

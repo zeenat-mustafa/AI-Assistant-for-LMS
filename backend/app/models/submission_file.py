@@ -24,6 +24,15 @@ class SubmissionFile(Base):
     matched_unsolved_file_id: Mapped[int | None] = mapped_column(
         ForeignKey("unsolved_files.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # The SubmissionUpload row this notebook was extracted from. NULL only for
+    # rows created before this feature existed — every notebook created going
+    # forward always has one, set in the same request that creates it. Purely
+    # a provenance/cascade-cleanup link, same pattern as
+    # UnsolvedFile.source_upload_id: nothing in the grading pipeline
+    # (file_matcher, evaluator, rubric, MCP tools) reads it.
+    source_upload_id: Mapped[int | None] = mapped_column(
+        ForeignKey("submission_uploads.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     # Filename within the archive (or the original filename for a direct .ipynb upload).
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     # Path to the extracted .ipynb on disk, relative to storage_root.

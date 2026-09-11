@@ -22,20 +22,33 @@
 
 import { useState } from "react";
 
-import type { GradeSummary, SessionGradeReport } from "@/lib/api";
+import { ApiError, downloadSubmissionUpload } from "@/lib/api";
+import type { GradeSummary, SessionGradeReport, SubmissionRead } from "@/lib/api";
 import { EmptyState, Loading, Panel, SmallButton } from "@/components/ui";
 import { FormError } from "@/components/ui";
 import { GradeFileRow } from "@/components/grade-file-row";
+import { formatDate } from "@/lib/format";
+import { triggerBlobDownload } from "@/lib/download";
 
 export function GradesRoster({
+  sessionId,
   report,
   error,
   totalAssignmentFiles,
+  submissionsByStudent,
 }: {
+  sessionId: number;
   /** null while loading. */
   report: SessionGradeReport | null;
   error: string | null;
   totalAssignmentFiles: number;
+  /**
+   * Every student's SubmissionUpload rows, keyed by student_id -- lets this
+   * roster also show/download exactly what each student uploaded, the same
+   * way assignment files are shown to instructors. `undefined` while loading
+   * (a student simply has no entry if they've uploaded nothing).
+   */
+  submissionsByStudent: Record<number, SubmissionRead> | undefined;
 }) {
   return (
     <Panel
@@ -53,8 +66,10 @@ export function GradesRoster({
           {report.students.map((student) => (
             <StudentRow
               key={student.student_id}
+              sessionId={sessionId}
               student={student}
               totalAssignmentFiles={totalAssignmentFiles}
+              uploads={submissionsByStudent?.[student.student_id]?.uploads ?? []}
             />
           ))}
         </ul>
@@ -64,15 +79,20 @@ export function GradesRoster({
 }
 
 function StudentRow({
+  sessionId,
   student,
   totalAssignmentFiles,
+  uploads,
 }: {
+  sessionId: number;
   student: GradeSummary;
   totalAssignmentFiles: number;
+  uploads: SubmissionRead["uploads"];
 }) {
   const [expanded, setExpanded] = useState(false);
   const gradedCount = student.per_file.length;
   const nothingGraded = gradedCount === 0;
+  const canExpand = gradedCount > 0 || uploads.length > 0;
 
   return (
     <li className="py-3">
@@ -89,25 +109,84 @@ function StudentRow({
 
         <span className="flex shrink-0 items-center gap-3">
           <ScoreBadge student={student} />
-          {gradedCount > 0 ? (
+          {canExpand ? (
             <SmallButton onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
-              {expanded ? "Hide files" : "Show files"}
+              {expanded ? "Hide details" : "Show details"}
             </SmallButton>
           ) : null}
         </span>
       </div>
 
-      {/*
-        Each file collapses to filename + score; opening one leaves the others
-        as they were.
-      */}
-      {expanded && !nothingGraded ? (
-        <ul className="mt-3 border-l-2 border-slate-200 pl-4">
-          {student.per_file.map((grade) => (
-            <GradeFileRow key={grade.id} grade={grade} dense />
-          ))}
-        </ul>
+      {expanded ? (
+        <div className="mt-3 border-l-2 border-slate-200 pl-4">
+          {uploads.length > 0 ? (
+            <div className="mb-3">
+              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">
+                Submitted files
+              </p>
+              <ul className="divide-y divide-slate-100">
+                {uploads.map((upload) => (
+                  <UploadRow key={upload.id} sessionId={sessionId} upload={upload} />
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {/* Each graded file collapses to filename + score. */}
+          {!nothingGraded ? (
+            <ul>
+              {student.per_file.map((grade) => (
+                <GradeFileRow key={grade.id} grade={grade} dense />
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
+    </li>
+  );
+}
+
+function UploadRow({
+  sessionId,
+  upload,
+}: {
+  sessionId: number;
+  upload: SubmissionRead["uploads"][number];
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDownload() {
+    setError(null);
+    setBusy(true);
+    try {
+      const blob = await downloadSubmissionUpload(sessionId, upload.id);
+      triggerBlobDownload(blob, upload.original_filename);
+    } catch (downloadError) {
+      setError(
+        downloadError instanceof ApiError
+          ? downloadError.detail
+          : `Could not download ${upload.original_filename}.`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="flex items-center justify-between gap-3 py-1.5">
+      <span className="min-w-0">
+        <span className="block truncate text-xs font-medium text-slate-800">
+          {upload.original_filename}
+        </span>
+        {error ? <span className="block text-xs text-red-600">{error}</span> : null}
+        <span className="block text-xs text-slate-500">
+          Uploaded {formatDate(upload.uploaded_at)}
+        </span>
+      </span>
+      <SmallButton onClick={() => void handleDownload()} disabled={busy}>
+        {busy ? "Downloading…" : "Download"}
+      </SmallButton>
     </li>
   );
 }
