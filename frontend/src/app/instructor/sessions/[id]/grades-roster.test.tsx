@@ -16,6 +16,7 @@ function grade(overrides: Partial<GradeRead> = {}): GradeRead {
     score: 8.5,
     feedback_text: "Solid work on the kernel timing section.",
     rationale: null,
+    summary: null,
     graded_at: "2026-09-06T16:00:00",
     graded_by_name: null,
     ...overrides,
@@ -175,6 +176,76 @@ describe("<GradesRoster />", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /hide details/i }));
     expect(screen.queryByText("a.ipynb")).not.toBeInTheDocument();
+  });
+
+  it("shows the summary above the unchanged per-criterion breakdown when present", async () => {
+    render(
+      <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
+        report={report([
+          student({
+            per_file: [
+              grade({
+                id: 1,
+                original_filename: "a.ipynb",
+                score: 8.5,
+                summary: "You did strong work overall, with the kernel timing section particularly solid.",
+                rationale: [
+                  {
+                    criterion: "Kernel timing",
+                    points_possible: 5,
+                    points_awarded: 4.5,
+                    explanation: "Correctly measured and compared kernel run times.",
+                  },
+                ],
+              }),
+            ],
+          }),
+        ])}
+        error={null}
+        totalAssignmentFiles={1}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /show details/i }));
+    await userEvent.click(screen.getByRole("button", { name: /a\.ipynb/ }));
+
+    // Summary and the existing breakdown both render, together.
+    expect(
+      screen.getByText(/you did strong work overall, with the kernel timing section particularly solid/i),
+    ).toBeVisible();
+    expect(screen.getByText("Kernel timing")).toBeVisible();
+    expect(screen.getByText("4.5 / 5")).toBeVisible();
+  });
+
+  it("omits the summary line and shows only the breakdown when summary is null (historical grade)", async () => {
+    render(
+      <GradesRoster
+        sessionId={5}
+        submissionsByStudent={undefined}
+        report={report([
+          student({
+            per_file: [
+              grade({
+                id: 1,
+                original_filename: "a.ipynb",
+                summary: null,
+                feedback_text: "Solid work on the kernel timing section.",
+              }),
+            ],
+          }),
+        ])}
+        error={null}
+        totalAssignmentFiles={1}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /show details/i }));
+    await userEvent.click(screen.getByRole("button", { name: /a\.ipynb/ }));
+
+    // Exactly today's behavior: only the existing fallback feedback text.
+    expect(screen.getByText("Solid work on the kernel timing section.")).toBeVisible();
   });
 
   it("renders the structured rationale as per-criterion blocks when present", async () => {

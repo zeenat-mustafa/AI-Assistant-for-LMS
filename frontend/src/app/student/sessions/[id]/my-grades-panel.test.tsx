@@ -16,6 +16,7 @@ function grade(overrides: Partial<GradeRead> = {}): GradeRead {
     score: 8.5,
     feedback_text: "Strong array work; the plotting section is incomplete.",
     rationale: null,
+    summary: null,
     graded_at: "2026-09-07T11:00:00",
     graded_by_name: null,
     ...overrides,
@@ -208,6 +209,60 @@ describe("<MyGradesPanel />", () => {
       />,
     );
     expect(screen.getByText(/strong array work/i)).toBeInTheDocument();
+  });
+
+  it("shows only the summary paragraph when the grade has one -- no per-criterion cards, no expand control", () => {
+    render(
+      <MyGradesPanel
+        grades={summary({
+          per_file: [
+            grade({
+              summary: "You did strong work overall, with only the plotting section left incomplete.",
+              rationale: [
+                {
+                  criterion: "Array reshaping",
+                  points_possible: 3,
+                  points_awarded: 2.5,
+                  explanation: "SHOULD-NOT-RENDER",
+                },
+              ],
+            }),
+          ],
+        })}
+        error={null}
+        submission={SUBMISSION}
+        totalAssignmentFiles={1}
+      />,
+    );
+
+    expect(screen.getByText("Numpy_and_Plotting.ipynb")).toBeInTheDocument();
+    expect(screen.getByText("8.5 / 10")).toBeInTheDocument();
+    expect(
+      screen.getByText(/you did strong work overall, with only the plotting section left incomplete/i),
+    ).toBeInTheDocument();
+    // No expand/collapse control and no per-criterion detail at all -- the
+    // structured rationale is still stored server-side, just never rendered here.
+    expect(screen.queryByRole("button", { name: /Numpy_and_Plotting/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Array reshaping")).not.toBeInTheDocument();
+    expect(screen.queryByText("SHOULD-NOT-RENDER")).not.toBeInTheDocument();
+    expect(screen.queryByText(/strong array work; the plotting section is incomplete/i)).not.toBeInTheDocument();
+  });
+
+  it("falls back to the pre-existing collapsible breakdown when summary is null (historical grade)", async () => {
+    render(
+      <MyGradesPanel
+        grades={summary({ per_file: [grade({ summary: null })] })}
+        error={null}
+        submission={SUBMISSION}
+        totalAssignmentFiles={1}
+      />,
+    );
+
+    // Same as before this feature: collapsed to filename + score, expandable.
+    const toggle = screen.getByRole("button", { name: /Numpy_and_Plotting/ });
+    expect(screen.getByText(/strong array work/i)).not.toBeVisible();
+    await userEvent.click(toggle);
+    expect(screen.getByText(/strong array work/i)).toBeVisible();
   });
 
   it("surfaces a load failure", () => {

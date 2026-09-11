@@ -17,7 +17,7 @@
  * therefore never asked to guess: if it is rendering, the file is graded, and
  * "0 / 10" means the student scored zero.
  *
- * Content is unchanged from what these panels showed before except for two
+ * Content is unchanged from what these panels showed before except for three
  * things: (bugfix-structured-rationale-display) when the backend has a
  * structured per-criterion breakdown (`GradeRead.rationale`), that renders as
  * the primary detail -- one block per criterion with its name, "X / Y", and
@@ -26,7 +26,12 @@
  * it rendered before this fix. (bugfix-session-naming-attribution) a "Graded
  * by {name}" line renders alongside the existing "Graded {date}" line when
  * `graded_by_name` is present -- omitted entirely for historical/MCP grades
- * with no attribution, never shown as "Graded by null" or similar.
+ * with no attribution, never shown as "Graded by null" or similar. (feature-
+ * grade-summary) an optional `showSummary` prop renders `grade.summary` as a
+ * paragraph above the (otherwise completely unchanged) rationale/feedback
+ * block -- opt-in and additive, so the instructor roster can show it while
+ * the student's own view renders its own separate summary-only row instead
+ * of this component entirely when a summary exists (see my-grades-panel.tsx).
  */
 
 import { useId, useState } from "react";
@@ -37,10 +42,13 @@ import { formatDate } from "@/lib/format";
 export function GradeFileRow({
   grade,
   dense = false,
+  showSummary = false,
 }: {
   grade: GradeRead;
   /** Tighter type scale, for the roster's nested per-student list. */
   dense?: boolean;
+  /** Render `grade.summary` (if present) above the unchanged breakdown below. */
+  showSummary?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const panelId = useId();
@@ -85,6 +93,17 @@ export function GradeFileRow({
         </p>
         {grade.graded_by_name ? (
           <p className="text-xs text-slate-500">Graded by {grade.graded_by_name}</p>
+        ) : null}
+        {showSummary && grade.summary ? (
+          <p
+            className={
+              dense
+                ? "mt-1 text-xs text-slate-700"
+                : "mt-2 text-sm text-slate-700"
+            }
+          >
+            {grade.summary}
+          </p>
         ) : null}
         {grade.rationale && grade.rationale.length > 0 ? (
           <ul className={dense ? "mt-1 space-y-1.5" : "mt-2 space-y-2"}>

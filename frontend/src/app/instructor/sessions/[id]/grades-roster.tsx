@@ -136,7 +136,7 @@ function StudentRow({
           {!nothingGraded ? (
             <ul>
               {student.per_file.map((grade) => (
-                <GradeFileRow key={grade.id} grade={grade} dense />
+                <GradeFileRow key={grade.id} grade={grade} dense showSummary />
               ))}
             </ul>
           ) : null}

@@ -65,7 +65,10 @@ _UNMATCHED = {"success": False, "error": "not matched to an assignment"}
 
 
 def _gemini_evaluation_response() -> str:
-    return json.dumps({"criteria": _CRITERIA})
+    return json.dumps({
+        "criteria": _CRITERIA,
+        "summary": "You did well overall, handling most of the assignment correctly.",
+    })
 
 
 @pytest.fixture

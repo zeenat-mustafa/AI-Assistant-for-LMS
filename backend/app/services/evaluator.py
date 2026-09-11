@@ -57,7 +57,8 @@ def build_evaluation_prompt(
     per-cell markers already embedded in ``submission_cells``.
 
     Instructs Gemini to respond with ONLY valid JSON matching the shape:
-    {"criteria": [{"criterion": str, "points_possible": number, "points_awarded": number, "explanation": str}, ...]}
+    {"criteria": [{"criterion": str, "points_possible": number, "points_awarded": number, "explanation": str}, ...],
+     "summary": str}
     """
     criteria_list = rubric.get("criteria", []) if isinstance(rubric, dict) else rubric
     rubric_formatted = json.dumps({"criteria": criteria_list}, indent=2)
@@ -83,7 +84,9 @@ def build_evaluation_prompt(
         "version records output, a submitted output consistent with correct execution.\n"
         "4. Award points ('points_awarded') for each criterion based on correctness and completeness.\n"
         "5. You must NEVER award more than that criterion's 'points_possible', and never award negative points.\n"
-        "6. Provide a concise, constructive explanation for the points awarded on each criterion.\n"
+        "6. Provide a concise, constructive explanation for the points awarded on each criterion, "
+        "written as direct feedback to the student (use 'you'/'your', e.g. 'You correctly "
+        "implemented X, but Y was never executed' — not 'The student implemented X').\n"
         "7. CRITICAL — every code cell is tagged with an explicit marker stating whether it WAS "
         "executed or was NEVER EXECUTED, based on the submitted notebook's real execution_count and "
         "recorded outputs (trust this marker's stated conclusion literally, including the rare case "
@@ -127,6 +130,9 @@ def build_evaluation_prompt(
         "actually imported or called afterward — does NOT count as genuine partial use; it is still "
         "full substitution. Do not penalize substitution when the instructions only state a "
         "goal/outcome without naming a specific required tool; any valid approach is acceptable there.\n"
+        "9. Additionally, write one short paragraph (3-5 sentences) summarizing the "
+        "student's overall performance across the whole submission — what they did "
+        "well, what they missed, and why — in a warm but honest tone.\n"
         "5. Respond with ONLY valid JSON — absolutely no markdown fences (no ``` or ```json), "
         "and no conversational text before or after.\n\n"
         "Award points in 0.5-point increments only.\n"
@@ -139,7 +145,8 @@ def build_evaluation_prompt(
         '      "points_awarded": number,\n'
         '      "explanation": str\n'
         '    }\n'
-        '  ]\n'
+        '  ],\n'
+        '  "summary": str\n'
         "}\n\n"
         f"Rubric:\n{rubric_formatted}\n\n"
         f"Unsolved Notebook (ordered cells):\n{unsolved_view}\n\n"
@@ -183,16 +190,21 @@ def parse_evaluation_response(raw_text: str, rubric: dict[str, Any]) -> dict[str
       - Must contain the same criteria count and names as the rubric.
       - Clamps each criterion's points_awarded between 0 and points_possible.
       - Computes total_score = sum(points_awarded), clamped to [0.0, 10.0].
+      - Must contain a non-empty 'summary' string within reasonable length
+        bounds (10-2000 chars) — a short personalized paragraph, not a second
+        LLM call; malformed/missing summary fails the same way a malformed
+        criteria list already does.
 
     Returns
     -------
-    {"valid": bool, "criteria": [...], "total_score": float, "error": str | None}
+    {"valid": bool, "criteria": [...], "total_score": float, "summary": str, "error": str | None}
     """
     if not raw_text or not raw_text.strip():
         return {
             "valid": False,
             "criteria": [],
             "total_score": 0.0,
+            "summary": "",
             "error": "Empty response from Gemini.",
         }
 
@@ -223,6 +235,7 @@ def parse_evaluation_response(raw_text: str, rubric: dict[str, Any]) -> dict[str
             "valid": False,
             "criteria": [],
             "total_score": 0.0,
+            "summary": "",
             "error": f"Invalid JSON: {exc}",
         }
 
@@ -235,6 +248,7 @@ def parse_evaluation_response(raw_text: str, rubric: dict[str, Any]) -> dict[str
             "valid": False,
             "criteria": [],
             "total_score": 0.0,
+            "summary": "",
             "error": "JSON root must be an object with 'criteria' key or a list.",
         }
 
@@ -243,7 +257,37 @@ def parse_evaluation_response(raw_text: str, rubric: dict[str, Any]) -> dict[str
             "valid": False,
             "criteria": [],
             "total_score": 0.0,
+            "summary": "",
             "error": "'criteria' must be a list.",
+        }
+
+    # A list-root response (the legacy lenient shape) has nowhere to carry a
+    # top-level 'summary' at all — treated the same as a genuinely missing one.
+    summary_raw = data.get("summary") if isinstance(data, dict) else None
+    if not isinstance(summary_raw, str) or not summary_raw.strip():
+        return {
+            "valid": False,
+            "criteria": [],
+            "total_score": 0.0,
+            "summary": "",
+            "error": "Missing or empty 'summary' in evaluation response.",
+        }
+    summary = summary_raw.strip()
+    if len(summary) < 10:
+        return {
+            "valid": False,
+            "criteria": [],
+            "total_score": 0.0,
+            "summary": "",
+            "error": f"'summary' is too short to be a real summary ({len(summary)} chars).",
+        }
+    if len(summary) > 2000:
+        return {
+            "valid": False,
+            "criteria": [],
+            "total_score": 0.0,
+            "summary": "",
+            "error": f"'summary' is implausibly long ({len(summary)} chars) — refusing to trust it.",
         }
 
     rubric_criteria = rubric.get("criteria", []) if isinstance(rubric, dict) else rubric
@@ -255,6 +299,7 @@ def parse_evaluation_response(raw_text: str, rubric: dict[str, Any]) -> dict[str
             "valid": False,
             "criteria": [],
             "total_score": 0.0,
+            "summary": "",
             "error": (
                 f"Criteria count mismatch: expected {len(rubric_criteria)}, "
                 f"got {len(evaluated_criteria)}."
@@ -269,6 +314,7 @@ def parse_evaluation_response(raw_text: str, rubric: dict[str, Any]) -> dict[str
                 "valid": False,
                 "criteria": [],
                 "total_score": 0.0,
+                "summary": "",
                 "error": f"Evaluated item at index {idx} is invalid or missing 'criterion'.",
             }
         crit_name = str(item["criterion"]).strip()
@@ -293,6 +339,7 @@ def parse_evaluation_response(raw_text: str, rubric: dict[str, Any]) -> dict[str
                 "valid": False,
                 "criteria": [],
                 "total_score": 0.0,
+                "summary": "",
                 "error": f"Missing evaluation for rubric criterion: '{expected_name}'.",
             }
 
@@ -326,6 +373,7 @@ def parse_evaluation_response(raw_text: str, rubric: dict[str, Any]) -> dict[str
         "valid": True,
         "criteria": validated_criteria,
         "total_score": total_score,
+        "summary": summary,
         "error": None,
     }
 
@@ -344,7 +392,7 @@ def evaluate_submission_file(db: Session, submission_file_id: int) -> dict[str, 
       3. Load matched UnsolvedFile. If rubric_generated is False, generate rubric first.
       4. Parse submission .ipynb via parse_notebook_file; build text block of code + outputs.
       5. Build evaluation prompt, call Gemini, parse evaluation response.
-      6. Return {"success": True, "total_score": float, "criteria": [...]} on success.
+      6. Return {"success": True, "total_score": float, "criteria": [...], "summary": str} on success.
       7. On any failure, return {"success": False, "error": str} — never crash caller.
       Note: Does not write to Grade table (deferred to Sub-feature 5).
     """
@@ -474,6 +522,7 @@ def evaluate_submission_file(db: Session, submission_file_id: int) -> dict[str, 
             "success": True,
             "total_score": parsed_eval["total_score"],
             "criteria": parsed_eval["criteria"],
+            "summary": parsed_eval["summary"],
         }
 
     except Exception as exc:

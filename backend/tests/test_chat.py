@@ -59,7 +59,8 @@ def _good_gemini_response() -> str:
             "points_possible": 10.0,
             "points_awarded": 8.0,
             "explanation": "Mostly correct.",
-        }]
+        }],
+        "summary": "You did well overall, with mostly correct work and just a little room to improve.",
     })
 
 

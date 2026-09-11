@@ -22,6 +22,10 @@ class GradeRead(BaseModel):
     score: float                  # out of 10
     feedback_text: str
     rationale: list[RationaleEntry] | None = None
+    # Short personalized overall-performance paragraph, from the same
+    # evaluation call as score/rationale (no second LLM call). None for
+    # grades produced before this field existed — never fabricated.
+    summary: str | None = None
     graded_at: datetime
     # Display name of the instructor who triggered this grading run. None
     # for grades produced before this field existed, or via an MCP entry
@@ -46,6 +50,7 @@ class GradeRead(BaseModel):
             score=grade_obj.score,
             feedback_text=grade_obj.feedback_text,
             rationale=rationale,
+            summary=grade_obj.summary,
             graded_at=grade_obj.graded_at,
             graded_by_name=(
                 grade_obj.graded_by_instructor.name

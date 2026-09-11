@@ -498,7 +498,7 @@ class TestGradingPipelineIndifferentToUploadShape:
 
         with patch(
             "app.services.evaluator.call_gemini_for_evaluation",
-            return_value='{"criteria": [{"criterion": "Completion", "points_possible": 10.0, "points_awarded": 10.0, "explanation": "Done."}]}',
+            return_value='{"criteria": [{"criterion": "Completion", "points_possible": 10.0, "points_awarded": 10.0, "explanation": "Done."}], "summary": "You completed the assignment fully and correctly, nice work."}',
         ):
             res = c.post(
                 f"/api/v1/sessions/10/submissions/files/{sub_file_id}/grade",
