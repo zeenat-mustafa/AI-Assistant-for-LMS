@@ -21,6 +21,16 @@
  * and posts it with the bearer token -- deliberately not a `<form action>`
  * Server Action, which runs on the Next server and could not read the JWT
  * from localStorage.
+ *
+ * Auto-refresh after grading via the floating widget
+ * ----------------------------------------------------
+ * The floating chat widget (mounted at the instructor layout) has no idea
+ * this page exists. It only announces the raw summary message from a
+ * completed run (lib/grading-announcements.tsx). This page subscribes and,
+ * using the same summaryNamesSession check the old embedded panel used,
+ * refetches the grade report + submissions ONLY when the announced run
+ * named this session -- restoring same-tab, self-triggered auto-refresh
+ * without giving the widget any page-specific knowledge.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -45,6 +55,7 @@ import type {
 import { GradesRoster } from "./grades-roster";
 import { RequireAuth } from "@/components/require-auth";
 import { SignedInShell } from "@/components/signed-in-shell";
+import { summaryNamesSession, useGradingAnnouncements } from "@/lib/grading-announcements";
 import {
   EmptyState,
   FormError,
@@ -171,6 +182,33 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
   const refreshUploads = useCallback(async () => {
     setUploads(await listAssignments(sessionId));
   }, [sessionId]);
+
+  const { lastCompletion } = useGradingAnnouncements();
+  const sessionTitle = session?.title;
+
+  useEffect(() => {
+    if (!lastCompletion || !sessionTitle) return;
+    if (!summaryNamesSession(lastCompletion.message, sessionTitle)) return;
+
+    let cancelled = false;
+    void Promise.all([loadGradeReport(sessionId), loadSubmissions(sessionId)]).then(
+      ([reportResult, byStudent]) => {
+        if (cancelled) return;
+        if ("error" in reportResult) {
+          setReportError(reportResult.error);
+        } else {
+          setReport(reportResult.report);
+          setReportError(null);
+        }
+        setSubmissionsByStudent(byStudent);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+    // Re-runs only when a NEW announcement arrives (lastCompletion.id changes)
+    // or this page's own session title becomes known/changes.
+  }, [lastCompletion, sessionTitle, sessionId]);
 
   if (loadError) {
     return (
