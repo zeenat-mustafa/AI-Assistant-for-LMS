@@ -14,6 +14,7 @@ Key capabilities:
     notebook parsing, evaluation, and structured result return.
 """
 
+import difflib
 import json
 import logging
 import re
@@ -42,11 +43,18 @@ def build_evaluation_prompt(
     rubric: dict[str, Any],
     unsolved_cells: list[dict[str, Any]],
     submission_cells: list[dict[str, Any]],
+    execution_provenance_summary: str | None = None,
 ) -> str:
     """
     Build a prompt giving Gemini the rubric criteria and the student's actual
     code + cell outputs (plain text), instructing it to award points per criterion
     (never exceeding that criterion's points_possible) with a short explanation each.
+
+    ``execution_provenance_summary``, when given, is a rough aggregate count of
+    how many pre-written code cells show genuine vs. inherited-from-template
+    execution (see ``_execution_provenance_summary``) — a starting signal for
+    the proportional-credit rule below, not an authoritative override of the
+    per-cell markers already embedded in ``submission_cells``.
 
     Instructs Gemini to respond with ONLY valid JSON matching the shape:
     {"criteria": [{"criterion": str, "points_possible": number, "points_awarded": number, "explanation": str}, ...]}
@@ -55,6 +63,12 @@ def build_evaluation_prompt(
     rubric_formatted = json.dumps({"criteria": criteria_list}, indent=2)
     unsolved_view = _format_cells_for_evaluation(unsolved_cells)
     submission_view = _format_cells_for_evaluation(submission_cells)
+    provenance_block = (
+        f"\n\nPre-written Cell Execution Summary (rough aggregate signal — the "
+        f"per-cell markers above are authoritative):\n{execution_provenance_summary}"
+        if execution_provenance_summary
+        else ""
+    )
 
     return (
         "You are an expert academic grading assistant. Evaluate the following student's "
@@ -81,6 +95,21 @@ def build_evaluation_prompt(
         "not literally shown. Well-written but never-executed code can still earn credit for criteria "
         "that only require code structure/completeness — but never for a criterion specifically about "
         "running, producing, or printing a result.\n"
+        "8a. Some code cells are marked IDENTICAL TO THE UNSOLVED TEMPLATE — meaning that "
+        "cell's execution_count and/or recorded output exactly matches what was already present "
+        "in the unsolved assignment file before the student ever touched it (leftover from the "
+        "instructor's own test run before upload). Never treat that as the student's own "
+        "execution, no matter what the raw execution_count number is — it is not evidence the "
+        "student ran anything. Only a marker explicitly stating genuine/differing execution counts "
+        "as the student having run that cell.\n"
+        "8b. For the rubric's pre-written/scaffolding 'runs correctly' criterion, award credit "
+        "PROPORTIONALLY to the fraction of that scaffolding's code cells whose markers show "
+        "genuine student execution (differing from the template) out of all pre-written cells that "
+        "were ever executed by anyone — never award the criterion's full points for only some of "
+        "the scaffolding executing genuinely, and never award zero just because other unrelated "
+        "cells elsewhere are inherited or never-executed. Use the Pre-written Cell Execution "
+        "Summary below, if present, as a starting count, but verify it against the actual per-cell "
+        "markers.\n"
         "8. If the unsolved notebook's instructions name a SPECIFIC required library/tool/framework "
         "as the way to complete a step (e.g., \"evaluate using ragas\", \"use Streamlit\", \"use "
         "Supabase\") — as opposed to only describing a goal or outcome without mandating a method "
@@ -114,7 +143,8 @@ def build_evaluation_prompt(
         "}\n\n"
         f"Rubric:\n{rubric_formatted}\n\n"
         f"Unsolved Notebook (ordered cells):\n{unsolved_view}\n\n"
-        f"Student Submission (corresponding ordered cells and recorded outputs):\n{submission_view}\n"
+        f"Student Submission (corresponding ordered cells and recorded outputs):\n{submission_view}"
+        f"{provenance_block}\n"
     )
 
 
@@ -390,14 +420,32 @@ def evaluate_submission_file(db: Session, submission_file_id: int) -> dict[str, 
                 "success": False,
                 "error": f"Failed to extract submission structure: {submission_structure.get('error')}",
             }
-        _append_recorded_outputs(submission_structure["cells"], nb_parsed.get("code_cells", []))
+        # Parse the unsolved template's code cells FIRST so the submission's
+        # markers can be built with template-comparison data available (Gap A:
+        # a cell inherits the instructor's own pre-upload execution_count/
+        # output unless it differs from the template). None (not []) when the
+        # unsolved notebook itself failed to parse, so the fail-safe path below
+        # falls back to the old exec_count/output-only rule instead of
+        # wrongly assuming "no template cells to compare against."
         unsolved_parsed = parse_notebook_file(absolute_path(unsolved.file_path))
+        unsolved_code_cells = (
+            unsolved_parsed.get("code_cells", []) if unsolved_parsed.get("valid") else None
+        )
+
+        provenance_stats = _append_recorded_outputs(
+            submission_structure["cells"],
+            nb_parsed.get("code_cells", []),
+            unsolved_code_cells=unsolved_code_cells,
+        )
         if unsolved_parsed.get("valid"):
-            _append_recorded_outputs(unsolved_structure["cells"], unsolved_parsed.get("code_cells", []))
+            _append_recorded_outputs(unsolved_structure["cells"], unsolved_code_cells)
 
         # Build prompt and invoke Gemini
         prompt = build_evaluation_prompt(
-            rubric, unsolved_structure["cells"], submission_structure["cells"]
+            rubric,
+            unsolved_structure["cells"],
+            submission_structure["cells"],
+            execution_provenance_summary=_execution_provenance_summary(provenance_stats),
         )
 
         try:
@@ -441,7 +489,53 @@ def evaluate_submission_file(db: Session, submission_file_id: int) -> dict[str, 
         }
 
 
-def _append_recorded_outputs(cells: list[dict[str, Any]], code_cells: list[dict[str, Any]]) -> None:
+def _align_unsolved_code_cells(
+    unsolved_code_cells: list[dict[str, Any]],
+    submission_code_cells: list[dict[str, Any]],
+) -> list[dict[str, Any] | None]:
+    """
+    Align each submission code cell to its counterpart in the unsolved
+    template, for detecting inherited execution metadata (Gap A).
+
+    Prefers nbformat's per-cell "id" (stable in nbformat >=4.5, confirmed
+    present and matching across real unsolved/submission pairs in this
+    project's dev data) — position-independent, so it survives a student
+    inserting, deleting, or reordering cells elsewhere in the notebook.
+    Falls back to positional (same-index) alignment, gated on the two cells'
+    source being a close match, only when "id" isn't usable on either side
+    (older/converted notebooks). A cell that can't be aligned either way maps
+    to None — callers must NOT treat that as "inherited" or "not pre-written";
+    it just falls back to the plain executed/never-executed rule, per the
+    fail-safe requirement (never guess provenance in either direction).
+    """
+    unsolved_by_id = {c["id"]: c for c in unsolved_code_cells if c.get("id")}
+    ids_usable = bool(unsolved_by_id) and any(c.get("id") for c in submission_code_cells)
+
+    aligned: list[dict[str, Any] | None] = []
+    for idx, sub_cell in enumerate(submission_code_cells):
+        match: dict[str, Any] | None = None
+        if ids_usable and sub_cell.get("id"):
+            match = unsolved_by_id.get(sub_cell["id"])
+        elif not ids_usable and idx < len(unsolved_code_cells):
+            candidate = unsolved_code_cells[idx]
+            if _sources_closely_match(sub_cell.get("source", ""), candidate.get("source", "")):
+                match = candidate
+        aligned.append(match)
+    return aligned
+
+
+def _sources_closely_match(a: str, b: str) -> bool:
+    a, b = (a or "").strip(), (b or "").strip()
+    if not a and not b:
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.9
+
+
+def _append_recorded_outputs(
+    cells: list[dict[str, Any]],
+    code_cells: list[dict[str, Any]],
+    unsolved_code_cells: list[dict[str, Any]] | None = None,
+) -> dict[str, int] | None:
     """
     Append parsed outputs to matching code-cell content for prompt context, and
     always tag the cell with an unambiguous execution marker.
@@ -458,32 +552,111 @@ def _append_recorded_outputs(cells: list[dict[str, Any]], code_cells: list[dict[
     a "[recorded outputs]" block, which is genuinely ambiguous on its own: a
     cell that runs fine but prints nothing looks identical to one that was
     never run at all unless this is stated explicitly.
+
+    When ``unsolved_code_cells`` is given (i.e. this is a submission, not the
+    unsolved file's own pass), a cell that WAS executed is further split:
+    inherited (its execution_count/output is identical to the aligned
+    unsolved template cell — leftover from the instructor's own pre-upload
+    run, not the student's work) vs. genuine (differs from the template, or
+    couldn't be aligned so the plain executed rule applies). Returns per-file
+    counts of {"genuine", "inherited", "never"} for the proportional-credit
+    prompt summary, or None when ``unsolved_code_cells`` is None (the
+    unsolved file's own pass has nothing to compare against).
     """
-    code_iter = iter(code_cells)
+    aligned = (
+        _align_unsolved_code_cells(unsolved_code_cells, code_cells)
+        if unsolved_code_cells is not None
+        else [None] * len(code_cells)
+    )
+    # Only a cell confirmed aligned to a template cell (aligned_unsolved is
+    # not None) is provably "pre-written" — that's the only pool the
+    # proportional-credit rule may safely sum over. An executed-but-unaligned
+    # cell might be pre-written scaffolding the aligner couldn't match, or
+    # might be the student's own new cell; per the fail-safe requirement it is
+    # graded (via the marker) but excluded from this count either way.
+    stats = {"prewritten_genuine": 0, "prewritten_inherited": 0, "prewritten_never": 0}
+
+    code_iter = iter(zip(code_cells, aligned))
     for cell in cells:
         if cell.get("type") != "code":
             continue
-        parsed_code = next(code_iter, None)
-        if not parsed_code:
+        pair = next(code_iter, None)
+        if not pair:
             continue
+        parsed_code, aligned_unsolved = pair
         outputs = [str(item) for item in parsed_code.get("outputs", []) if str(item).strip()]
         exec_count = parsed_code.get("execution_count")
         executed = exec_count is not None or bool(outputs)
-        if executed:
-            if exec_count is not None:
-                marker = f"[execution_count: {exec_count} — this cell WAS executed]"
-            else:
-                marker = (
-                    "[execution_count: None, but this cell has real recorded "
-                    "output below — outputs don't appear without execution, so "
-                    "treat this cell as WAS executed despite the missing counter]"
-                )
-            if outputs:
-                marker += "\n[recorded outputs]\n" + "\n".join(outputs)
-        else:
+        is_prewritten = unsolved_code_cells is not None and aligned_unsolved is not None
+
+        if not executed:
             marker = (
                 "[execution_count: None — this cell was NEVER EXECUTED by the "
                 "student. No output was produced, regardless of what the code "
                 "would do if run.]"
             )
+            if is_prewritten:
+                stats["prewritten_never"] += 1
+        else:
+            inherited = False
+            if is_prewritten:
+                unsolved_outputs = [
+                    str(item) for item in aligned_unsolved.get("outputs", []) if str(item).strip()
+                ]
+                inherited = (
+                    exec_count == aligned_unsolved.get("execution_count")
+                    and outputs == unsolved_outputs
+                )
+
+            if inherited:
+                marker = (
+                    f"[execution_count: {exec_count} — IDENTICAL to this cell's "
+                    "execution_count/output in the unsolved template the "
+                    "instructor uploaded. This is leftover metadata from the "
+                    "instructor's own run before upload, NOT evidence the "
+                    "student executed this cell. Treat as inherited, not "
+                    "student-executed, regardless of the raw execution_count "
+                    "value.]"
+                )
+                stats["prewritten_inherited"] += 1
+            else:
+                if exec_count is not None:
+                    marker = f"[execution_count: {exec_count} — this cell WAS executed"
+                else:
+                    marker = (
+                        "[execution_count: None, but this cell has real recorded "
+                        "output below — outputs don't appear without execution, so "
+                        "treat this cell as WAS executed despite the missing counter"
+                    )
+                if unsolved_code_cells is not None:
+                    marker += " (genuinely by the student — differs from the unsolved template)]" if is_prewritten else "]"
+                    if is_prewritten:
+                        stats["prewritten_genuine"] += 1
+                else:
+                    marker += "]"
+            if outputs:
+                marker += "\n[recorded outputs]\n" + "\n".join(outputs)
+
         cell["content"] = f"{cell.get('content', '')}\n{marker}"
+
+    return stats if unsolved_code_cells is not None else None
+
+
+def _execution_provenance_summary(stats: dict[str, int] | None) -> str | None:
+    """Human-readable aggregate of _append_recorded_outputs' per-file stats."""
+    if not stats:
+        return None
+    total_prewritten = (
+        stats["prewritten_genuine"] + stats["prewritten_inherited"] + stats["prewritten_never"]
+    )
+    if total_prewritten == 0:
+        return None
+    return (
+        f"Of {total_prewritten} pre-written code cell(s) confirmed present in the "
+        f"unsolved template: {stats['prewritten_genuine']} show genuine student "
+        f"execution (differ from the template); {stats['prewritten_inherited']} show "
+        f"execution metadata inherited unchanged from the template (not the "
+        f"student's own execution); {stats['prewritten_never']} were never executed "
+        f"at all. Scale the pre-written 'runs correctly' credit to "
+        f"{stats['prewritten_genuine']}/{total_prewritten}."
+    )
