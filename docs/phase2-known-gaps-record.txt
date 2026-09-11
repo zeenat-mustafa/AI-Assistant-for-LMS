@@ -1,0 +1,40 @@
+PHASE 2 — KNOWN GAPS RECORD
+(Not bugs — accepted MVP-scope limitations. Kept for possible Extended Goals / future revisit.)
+
+1. NO SMART FALLBACK FOR AMBIGUOUS FILE MATCHES
+   File: backend/app/services/file_matcher.py
+   If a student's submission doesn't clearly match any assignment (low confidence / no
+   candidate above the 0.55 threshold), the system flags it as "ambiguous"/unmatched
+   for manual instructor review instead of trying to intelligently guess which
+   assignment it was meant for. No LLM-based tiebreaker exists for this case.
+   Real example hit during testing: a student's file with a completely different
+   filename and fully rewritten content (their actual attempt at an assignment,
+   just saved under an unrelated name) was correctly left unmatched, not guessed.
+
+2. STUDENTS WITH ZERO SUBMISSIONS ARE INVISIBLE IN GRADE REPORTS
+   File: backend/app/routers/grades.py (session_grade_report)
+   A student who submits nothing at all for a session does not appear in
+   GET /sessions/{id}/grades at all — rather than appearing with a 0/blank entry.
+   Only students with at least one Submission row show up in the report.
+
+3. RUBRIC CRITERIA COUNT NOT STRICTLY ENFORCED
+   File: backend/app/services/rubric.py (parse_rubric_response)
+   The generation prompt asks for 3-6 criteria, but the parser only checks that the
+   response is a non-empty list — nothing rejects/regenerates if the AI returns,
+   say, 1 or 10 criteria instead. Harmless in practice since nothing downstream
+   depends on the exact count, but not actually enforced as documented.
+
+---
+COSMETIC / EFFICIENCY ONLY (lowest priority, purely internal code quality — not
+functional gaps, listed only for completeness):
+
+- Dead imports: `os` in notebook.py, `google.generativeai as genai` in evaluator.py
+  (leftover from before the Gemini/Groq/Ollama provider abstraction was added).
+- Stale module docstrings in rubric.py / evaluator.py still describe direct Gemini
+  calls instead of the current 3-tier provider path.
+- evaluate_submission_file() parses both the submission and the unsolved notebook
+  twice each (via two separate functions) — harmless now, worth revisiting only if
+  batch grading becomes slow at large scale (100+ students).
+- A filesystem/path-resolution failure inside file matching is labeled "ambiguous"
+  in the status field, even though it's actually a technical error, not a genuine
+  content-similarity ambiguity. Same practical outcome either way (unmatched, flagged).

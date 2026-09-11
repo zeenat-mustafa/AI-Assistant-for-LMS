@@ -11,7 +11,7 @@
  *    endpoint anywhere in the API to cross-reference against (the whole
  *    surface is 21 routes; auth.py has only login/me/register), so the table
  *    genuinely cannot be completed client-side. This is a real, permanent
- *    limitation -- documented in phase5-known-gaps-record.txt rather than as
+ *    limitation -- documented in docs/phase5-known-gaps-record.txt rather than as
  *    an on-screen footnote (bugfix-roster-footnote removed the latter).
  *
  * 2. `combined_score` is null ONLY when the session has no assignment files.
