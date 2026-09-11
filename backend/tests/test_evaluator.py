@@ -61,6 +61,9 @@ from app.models.user import User, UserRole
 from app.services.auth import create_access_token
 from app.services.evaluator import (
     EvaluationError,
+    _align_unsolved_code_cells,
+    _append_recorded_outputs,
+    _execution_provenance_summary,
     build_evaluation_prompt,
     call_gemini_for_evaluation,
     evaluate_submission_file,
@@ -406,6 +409,182 @@ def test_parse_evaluation_response_empty_string():
     parsed = parse_evaluation_response("", rubric)
     assert parsed["valid"] is False
     assert "Empty response" in parsed["error"]
+
+
+# ===========================================================================
+# 3b. Genuine-execution vs. inherited-template-metadata detection (Gap A)
+# ===========================================================================
+
+def test_align_by_id_prefers_id_over_position():
+    """Cell id alignment must survive a cell being inserted before the target."""
+    unsolved = [
+        {"source": "x = 1", "outputs": [], "execution_count": 1, "id": "a"},
+        {"source": "y = 2", "outputs": [], "execution_count": 2, "id": "b"},
+    ]
+    # Student inserted a brand-new cell at position 0; "b" is now index 2.
+    submission = [
+        {"source": "print('new')", "outputs": [], "execution_count": None, "id": "new"},
+        {"source": "x = 1", "outputs": [], "execution_count": 1, "id": "a"},
+        {"source": "y = 2", "outputs": [], "execution_count": 2, "id": "b"},
+    ]
+    aligned = _align_unsolved_code_cells(unsolved, submission)
+    assert aligned[0] is None
+    assert aligned[1] == unsolved[0]
+    assert aligned[2] == unsolved[1]
+
+
+def test_align_falls_back_to_position_when_ids_absent():
+    unsolved = [{"source": "x = 1", "outputs": [], "execution_count": 1}]
+    submission = [{"source": "x = 1", "outputs": [], "execution_count": 1}]
+    aligned = _align_unsolved_code_cells(unsolved, submission)
+    assert aligned[0] == unsolved[0]
+
+
+def test_align_positional_fallback_rejects_mismatched_content():
+    unsolved = [{"source": "x = 1", "outputs": [], "execution_count": 1}]
+    submission = [{"source": "totally_different_code()", "outputs": [], "execution_count": 1}]
+    aligned = _align_unsolved_code_cells(unsolved, submission)
+    assert aligned[0] is None
+
+
+def test_align_unmatched_id_is_unalignable_not_misattributed():
+    """A submission cell whose id doesn't exist in the template (a genuinely new
+    student cell) must never be force-aligned to an unrelated template cell."""
+    unsolved = [{"source": "x = 1", "outputs": [], "execution_count": 1, "id": "a"}]
+    submission = [{"source": "z = 9", "outputs": [], "execution_count": 3, "id": "brand-new"}]
+    aligned = _align_unsolved_code_cells(unsolved, submission)
+    assert aligned[0] is None
+
+
+def test_append_recorded_outputs_marks_inherited_identical_to_template():
+    unsolved_code_cells = [
+        {"source": "!pip install x", "outputs": ["ok"], "execution_count": 9, "id": "c1"},
+    ]
+    submission_code_cells = [
+        {"source": "!pip install x", "outputs": ["ok"], "execution_count": 9, "id": "c1"},
+    ]
+    cells = [{"type": "code", "content": "!pip install x"}]
+
+    stats = _append_recorded_outputs(cells, submission_code_cells, unsolved_code_cells=unsolved_code_cells)
+
+    assert "IDENTICAL to this cell's execution_count/output" in cells[0]["content"]
+    assert "NOT evidence the student executed" in cells[0]["content"]
+    assert stats == {"prewritten_genuine": 0, "prewritten_inherited": 1, "prewritten_never": 0}
+
+
+def test_append_recorded_outputs_marks_genuine_when_execution_differs():
+    unsolved_code_cells = [
+        {"source": "!pip install x", "outputs": ["ok"], "execution_count": 9, "id": "c1"},
+    ]
+    submission_code_cells = [
+        # Student re-ran it: same source, but a different execution_count.
+        {"source": "!pip install x", "outputs": ["ok"], "execution_count": 14, "id": "c1"},
+    ]
+    cells = [{"type": "code", "content": "!pip install x"}]
+
+    stats = _append_recorded_outputs(cells, submission_code_cells, unsolved_code_cells=unsolved_code_cells)
+
+    assert "genuinely by the student" in cells[0]["content"]
+    assert stats == {"prewritten_genuine": 1, "prewritten_inherited": 0, "prewritten_never": 0}
+
+
+def test_append_recorded_outputs_never_executed_takes_priority():
+    unsolved_code_cells = [
+        {"source": "x = 1", "outputs": [], "execution_count": None, "id": "c1"},
+    ]
+    submission_code_cells = [
+        {"source": "x = 1", "outputs": [], "execution_count": None, "id": "c1"},
+    ]
+    cells = [{"type": "code", "content": "x = 1"}]
+
+    stats = _append_recorded_outputs(cells, submission_code_cells, unsolved_code_cells=unsolved_code_cells)
+
+    assert "NEVER EXECUTED" in cells[0]["content"]
+    assert stats == {"prewritten_genuine": 0, "prewritten_inherited": 0, "prewritten_never": 1}
+
+
+def test_append_recorded_outputs_unalignable_cell_falls_back_to_old_rule():
+    """A cell that can't be aligned to the template must not be labeled
+    inherited or genuine — it keeps the plain Phase-2 executed marker."""
+    unsolved_code_cells = [
+        {"source": "totally unrelated", "outputs": [], "execution_count": 1, "id": "other"},
+    ]
+    submission_code_cells = [
+        {"source": "z = 42", "outputs": [], "execution_count": 3, "id": "new-cell"},
+    ]
+    cells = [{"type": "code", "content": "z = 42"}]
+
+    stats = _append_recorded_outputs(cells, submission_code_cells, unsolved_code_cells=unsolved_code_cells)
+
+    assert "execution_count: 3 — this cell WAS executed]" in cells[0]["content"]
+    assert "IDENTICAL" not in cells[0]["content"]
+    assert "genuinely by the student" not in cells[0]["content"]
+    assert stats == {"prewritten_genuine": 0, "prewritten_inherited": 0, "prewritten_never": 0}
+
+
+def test_append_recorded_outputs_without_unsolved_preserves_phase2_behavior():
+    """No unsolved_code_cells given → old two-state marker, no stats returned."""
+    code_cells = [{"source": "print(1)", "outputs": ["1"], "execution_count": None}]
+    cells = [{"type": "code", "content": "print(1)"}]
+
+    stats = _append_recorded_outputs(cells, code_cells)
+
+    assert stats is None
+    assert "despite the missing counter" in cells[0]["content"]
+
+
+def test_execution_provenance_summary_formats_counts():
+    summary = _execution_provenance_summary(
+        {"prewritten_genuine": 1, "prewritten_inherited": 2, "prewritten_never": 1}
+    )
+    assert summary is not None
+    assert "Of 4 pre-written code cell(s)" in summary
+    assert "1 show genuine student execution" in summary
+    assert "2 show execution metadata inherited" in summary
+    assert "1 were never executed at all" in summary
+    assert "Scale the pre-written 'runs correctly' credit to 1/4" in summary
+
+
+def test_execution_provenance_summary_none_when_no_prewritten_cells():
+    assert _execution_provenance_summary({"prewritten_genuine": 0, "prewritten_inherited": 0, "prewritten_never": 0}) is None
+    assert _execution_provenance_summary(None) is None
+
+
+def test_build_evaluation_prompt_includes_inherited_execution_instructions():
+    rubric = {"criteria": [{"criterion": "Runs Correctly", "points_possible": 1.5}]}
+    prompt = build_evaluation_prompt(rubric, [], [], execution_provenance_summary="1 of 2 genuine")
+    assert "IDENTICAL TO THE UNSOLVED TEMPLATE" in prompt
+    assert "PROPORTIONALLY" in prompt
+    assert "Pre-written Cell Execution Summary" in prompt
+    assert "1 of 2 genuine" in prompt
+
+
+def test_evaluate_submission_file_prompt_flags_inherited_execution(seeded_db):
+    """End-to-end: a submission cell identical to the unsolved template must
+    reach Gemini tagged as inherited, not as genuine student execution."""
+    shared_code_cells = [
+        {"source": "!pip install torch", "outputs": ["ok"], "execution_count": 9, "id": "setup"},
+    ]
+    gemini_eval_json = json.dumps({
+        "criteria": [
+            {"criterion": "Data Preprocessing", "points_possible": 3.0, "points_awarded": 0.0, "explanation": "x"},
+            {"criterion": "Model Training", "points_possible": 4.0, "points_awarded": 0.0, "explanation": "x"},
+            {"criterion": "Evaluation and Metrics", "points_possible": 3.0, "points_awarded": 0.0, "explanation": "x"},
+        ]
+    })
+
+    def fake_parse(path):
+        # Same fixture data for both files -> identical execution metadata.
+        return {"valid": True, "code_cells": [dict(c) for c in shared_code_cells]}
+
+    with patch("app.services.evaluator.parse_notebook_file", side_effect=fake_parse):
+        with patch("app.services.evaluator.call_gemini_for_evaluation", return_value=gemini_eval_json) as mock_gemini:
+            result = evaluate_submission_file(seeded_db, submission_file_id=300)
+
+    assert result["success"] is True
+    sent_prompt = mock_gemini.call_args[0][0]
+    assert "IDENTICAL to this cell's execution_count/output" in sent_prompt
+    assert "Scale the pre-written 'runs correctly' credit to 0/1" in sent_prompt
 
 
 # ===========================================================================

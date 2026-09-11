@@ -147,10 +147,15 @@ def parse_notebook_file(ipynb_path: Union[str, Path]) -> dict:
                 # execution_count is nbformat's own ground truth for whether this
                 # cell was ever run by the student: None means never executed,
                 # regardless of how correct or complete its source code looks.
+                # "id" is nbformat >=4.5's stable per-cell identifier — present
+                # on real student/instructor notebooks (verified against live
+                # dev-DB data) and, unlike position, survives a student
+                # inserting/deleting/reordering cells elsewhere in the file.
                 code_cells.append({
                     "source": source,
                     "outputs": outputs,
                     "execution_count": cell.get("execution_count"),
+                    "id": cell.get("id"),
                 })
 
         result["markdown_text"] = "\n\n".join(markdown_parts)

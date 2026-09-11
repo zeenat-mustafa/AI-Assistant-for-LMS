@@ -117,6 +117,18 @@ class TestParseNotebookFile:
         assert len(result["code_cells"]) == 1
         assert "def add" in result["code_cells"][0]["source"]
 
+    def test_code_cells_include_nbformat_cell_id(self, tmp_path):
+        """nbformat >=4.5 code cells carry a stable "id", used for template alignment."""
+        nb_bytes = _make_notebook(code_cells=[{"source": "x = 1"}, {"source": "y = 2"}])
+        nb_file = tmp_path / "with_ids.ipynb"
+        nb_file.write_bytes(nb_bytes)
+
+        result = parse_notebook_file(nb_file)
+
+        ids = [cell["id"] for cell in result["code_cells"]]
+        assert all(isinstance(cell_id, str) and cell_id for cell_id in ids)
+        assert len(set(ids)) == 2
+
     def test_malformed_json_returns_invalid(self, tmp_path):
         """Case 2: Corrupted JSON → valid=False with descriptive error, no exception."""
         bad_file = tmp_path / "corrupt.ipynb"
