@@ -30,6 +30,10 @@ export {
   uploadSubmission,
   listSubmissions,
   getMySubmission,
+  submissionUploadDownloadUrl,
+  downloadSubmissionUpload,
+  downloadMySubmissionUpload,
+  deleteSubmissionUpload,
   gradeSubmissionFile,
 } from "./submissions";
 export { getGradeReport, getMyGrades, getStudentGrades } from "./grades";

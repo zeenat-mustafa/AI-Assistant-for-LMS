@@ -6,6 +6,7 @@ from app.models.assignment_upload import AssignmentUpload
 from app.models.unsolved_file import UnsolvedFile
 from app.models.resource_file import ResourceFile
 from app.models.submission import Submission
+from app.models.submission_upload import SubmissionUpload
 from app.models.submission_file import SubmissionFile
 from app.models.grade import Grade
 
@@ -16,6 +17,7 @@ __all__ = [
     "UnsolvedFile",
     "ResourceFile",
     "Submission",
+    "SubmissionUpload",
     "SubmissionFile",
     "Grade",
 ]

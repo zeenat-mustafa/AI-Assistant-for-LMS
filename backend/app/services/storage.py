@@ -15,8 +15,19 @@ Directory layout under storage_root:
                                          the above, for internal grading use
         submissions/
             {student_id}/
-                {original_filename}   ← raw student upload (.ipynb or .zip)
-                extracted/            ← .ipynb files unpacked from a .zip
+                originals/
+                    {upload_id}/
+                        {original_filename}  ← raw bytes exactly as the
+                                                 student uploaded them, one
+                                                 per upload event. Namespaced
+                                                 by upload id (unlike
+                                                 assignments/originals/) since
+                                                 repeat uploads of the same
+                                                 filename are normal here —
+                                                 there is no duplicate-name
+                                                 rejection on this side.
+                extracted/            ← .ipynb files unpacked for grading,
+                                         from either a direct upload or a zip
 """
 
 import shutil
@@ -75,6 +86,20 @@ def submission_extract_dir(session_id: int, student_id: int) -> Path:
     return p
 
 
+def submission_upload_originals_dir(session_id: int, student_id: int, upload_id: int) -> Path:
+    """
+    Directory for the raw, unmodified bytes of ONE student upload event.
+    Namespaced by upload_id (unlike assignment_originals_dir's flat
+    directory) because repeat uploads of the same filename are expected and
+    allowed here — there is no duplicate-name rejection on the submission
+    side, so a flat directory would silently overwrite an earlier upload's
+    bytes with a later one of the same name.
+    """
+    p = submission_dir(session_id, student_id) / "originals" / str(upload_id)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def relative_path(absolute: Path) -> str:
     """
     Return the path string relative to storage_root.
@@ -115,17 +140,18 @@ async def save_original_upload_file(session_id: int, filename: str, data: bytes)
     return relative_path(dest)
 
 
-async def save_submission_file(
-    session_id: int, student_id: int, filename: str, data: bytes
+async def save_submission_original_file(
+    session_id: int, student_id: int, upload_id: int, filename: str, data: bytes
 ) -> str:
     """
-    Persist a student's raw upload (.ipynb or .zip).
+    Persist the raw, byte-for-byte bytes of one student submission upload
+    event, separate from whatever gets extracted from it internally.
     Returns the relative path stored in the DB.
     """
-    dest = submission_dir(session_id, student_id) / _safe_filename(filename)
+    dest = submission_upload_originals_dir(session_id, student_id, upload_id) / _safe_filename(filename)
     async with aiofiles.open(dest, "wb") as f:
         await f.write(data)
-    logger.info("Saved submission file: %s", dest)
+    logger.info("Saved original submission upload: %s", dest)
     return relative_path(dest)
 
 

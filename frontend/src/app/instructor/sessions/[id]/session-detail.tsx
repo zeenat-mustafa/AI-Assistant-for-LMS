@@ -33,12 +33,14 @@ import {
   getGradeReport,
   getSession,
   listAssignments,
+  listSubmissions,
   uploadAssignment,
 } from "@/lib/api";
 import type {
   AssignmentUploadRead,
   SessionGradeReport,
   SessionRead,
+  SubmissionRead,
 } from "@/lib/api";
 import { GradesRoster } from "./grades-roster";
 import { RequireAuth } from "@/components/require-auth";
@@ -87,6 +89,18 @@ async function loadGradeReport(
   }
 }
 
+/** Same discard-if-stale shape as the loaders above. Silently empty on failure --
+ * this only adds download links to the roster, so a failure here must not
+ * block the grade report itself from rendering. */
+async function loadSubmissions(sessionId: number): Promise<Record<number, SubmissionRead>> {
+  try {
+    const subs = await listSubmissions(sessionId);
+    return Object.fromEntries(subs.map((s) => [s.student_id, s]));
+  } catch {
+    return {};
+  }
+}
+
 export function SessionDetail({ sessionId }: { sessionId: number }) {
   return (
     <RequireAuth role="instructor">
@@ -104,6 +118,9 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
 
   const [report, setReport] = useState<SessionGradeReport | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
+
+  const [submissionsByStudent, setSubmissionsByStudent] =
+    useState<Record<number, SubmissionRead> | undefined>(undefined);
 
   useEffect(() => {
     // Guards against a slow response for one session id landing after the
@@ -134,6 +151,17 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
       }
       setReport(result.report);
       setReportError(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadSubmissions(sessionId).then((byStudent) => {
+      if (cancelled) return;
+      setSubmissionsByStudent(byStudent);
     });
     return () => {
       cancelled = true;
@@ -185,9 +213,11 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
         separately listed/refreshed in this component.
       */}
       <GradesRoster
+        sessionId={sessionId}
         report={report}
         error={reportError}
         totalAssignmentFiles={session.unsolved_files.length}
+        submissionsByStudent={submissionsByStudent}
       />
     </div>
   );

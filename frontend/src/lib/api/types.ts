@@ -130,9 +130,26 @@ export interface SessionList {
   items: SessionRead[];
 }
 
+// -- Submission uploads (backend/app/schemas/submission_upload.py) -----------
+
+/**
+ * `SubmissionUploadRead` -- one entry in a student's submission, one row per
+ * real upload event (uploads are ADDITIVE -- a new one never replaces an
+ * earlier one). Mirrors `AssignmentUploadRead` exactly: a zip is one row
+ * with its own filename, never a list of what's inside it. This is the only
+ * thing listing, instructor download, and per-item delete operate on.
+ */
+export interface SubmissionUploadRead {
+  id: number;
+  submission_id: number;
+  original_filename: string;
+  content_type: string | null;
+  uploaded_at: string;
+}
+
 // -- Submissions (backend/app/schemas/submission.py) -------------------------
 
-/** `SubmissionFileRead` -- one notebook inside a submission. */
+/** `SubmissionFileRead` -- one notebook extracted from a submission upload. */
 export interface SubmissionFileRead {
   id: number;
   original_filename: string;
@@ -140,15 +157,24 @@ export interface SubmissionFileRead {
   matched_unsolved_file_id: number | null;
   /** True once a Grade row exists for this submission file. */
   graded: boolean;
+  /** Which SubmissionUpload this notebook was extracted from. */
+  source_upload_id: number | null;
 }
 
-/** `SubmissionRead` -- a student's submission for one session. */
+/**
+ * `SubmissionRead` -- a student's submission for one session.
+ *
+ * `uploads` is the authoritative, exact-bytes list of everything the student
+ * has uploaded (additive across many calls) -- same shape as
+ * `SessionRead.assignment_uploads`. `files` is every notebook extracted
+ * internally for grading, across every upload.
+ */
 export interface SubmissionRead {
   id: number;
   session_id: number;
   student_id: number;
-  original_filename: string;
   submitted_at: string;
+  uploads: SubmissionUploadRead[];
   files: SubmissionFileRead[];
 }
 

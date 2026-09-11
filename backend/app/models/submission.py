@@ -40,6 +40,9 @@ class Submission(Base):
     submission_files: Mapped[list["SubmissionFile"]] = relationship(  # noqa: F821
         "SubmissionFile", back_populates="submission", cascade="all, delete-orphan"
     )
+    uploads: Mapped[list["SubmissionUpload"]] = relationship(  # noqa: F821
+        "SubmissionUpload", back_populates="submission", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Submission id={self.id} student_id={self.student_id} session_id={self.session_id}>"
