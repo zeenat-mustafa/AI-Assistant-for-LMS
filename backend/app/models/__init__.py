@@ -9,6 +9,8 @@ from app.models.submission import Submission
 from app.models.submission_upload import SubmissionUpload
 from app.models.submission_file import SubmissionFile
 from app.models.grade import Grade
+from app.models.lecture_file import LectureFile
+from app.models.lecture_chunk import LectureChunk, ChunkSource
 
 __all__ = [
     "User",
@@ -20,4 +22,7 @@ __all__ = [
     "SubmissionUpload",
     "SubmissionFile",
     "Grade",
+    "LectureFile",
+    "LectureChunk",
+    "ChunkSource",
 ]

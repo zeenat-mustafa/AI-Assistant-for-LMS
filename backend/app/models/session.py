@@ -52,6 +52,9 @@ class LMSSession(Base):
     submissions: Mapped[list["Submission"]] = relationship(  # noqa: F821
         "Submission", back_populates="session", cascade="all, delete-orphan"
     )
+    lecture_files: Mapped[list["LectureFile"]] = relationship(  # noqa: F821
+        "LectureFile", back_populates="session", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<LMSSession id={self.id} title={self.title!r}>"

@@ -20,6 +20,11 @@ google-generativeai==0.8.3
 # Notebook handling
 nbformat==5.10.4
 
+# Lecture file handling — Phase 7.1. Latest stable on PyPI as of pinning
+# (2026-09-12) is 1.0.2 (released 2024-08-07); confirmed via PyPI JSON API,
+# not assumed from memory.
+python-pptx==1.0.2
+
 # Session matching
 rapidfuzz==3.10.1
 

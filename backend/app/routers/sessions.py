@@ -23,6 +23,7 @@ from app.schemas.session import SessionCreate, SessionList, SessionRead, Session
 from app.schemas.assignment_upload import AssignmentUploadRead
 from app.schemas.unsolved_file import UnsolvedFileRead
 from app.schemas.resource_file import ResourceFileRead
+from app.schemas.lecture_file import LectureFileRead
 from app.services.auth import get_current_user, require_instructor
 from app.services.storage import delete_session_storage
 
@@ -46,6 +47,9 @@ def _session_read(session: LMSSession) -> SessionRead:
         ],
         resource_files=[
             ResourceFileRead.from_orm_model(f) for f in session.resource_files
+        ],
+        lecture_files=[
+            LectureFileRead.from_orm_model(f) for f in session.lecture_files
         ],
     )
 
