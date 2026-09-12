@@ -41,6 +41,7 @@ from app.models.resource_file import ResourceFile
 from app.models.user import User
 from app.schemas.assignment_upload import AssignmentUploadRead
 from app.services.auth import get_current_user, require_instructor
+from app.services.embeddings import upsert_chunk
 from app.services.storage import (
     absolute_path,
     save_assignment_file,
@@ -115,6 +116,65 @@ async def _extract_for_grading(
     # Any other file type: nothing extracted for the grading pipeline. The
     # original upload itself is still saved and listed — see upload_assignment.
     return [], []
+
+
+def _embed_unsolved_file_cells(unsolved: UnsolvedFile, abs_path: Path, session_id: int) -> None:
+    """
+    Embed every markdown/code cell of one unsolved (instructor-uploaded,
+    unsolved) notebook into Chroma — Phase 7.2. Mirrors the lecture upload
+    flow's embedding step (synchronous, same request, never blocks the
+    upload's own success).
+
+    Only ever called on UnsolvedFile — never on a Submission/SubmissionFile
+    (a student's actual work). One chunk per cell, never split further,
+    using the cell content/type exactly as extract_notebook_structure
+    provides it; a TODO placeholder or scaffolding comment is embedded as-is
+    since it contains no answer. Sets unsolved.embedded True only if every
+    non-blank cell embedded successfully; on any failure, embedded stays
+    False and embedding_error records the real reason(s).
+    """
+    from app.services.notebook import extract_notebook_structure
+
+    structure = extract_notebook_structure(str(abs_path))
+    if not structure["valid"]:
+        unsolved.embedded = False
+        unsolved.embedding_error = structure["error"]
+        logger.warning(
+            "Could not parse notebook structure for embedding: %s (session %d): %s",
+            unsolved.original_filename, session_id, structure["error"],
+        )
+        return
+
+    errors: list[str] = []
+    for cell_index, cell in enumerate(structure["cells"]):
+        content = cell["content"]
+        if not content or not content.strip():
+            continue  # nothing meaningful to embed or retrieve
+        try:
+            upsert_chunk(
+                chunk_id=f"notebook:{unsolved.id}:{cell_index}",
+                text=content,
+                metadata={
+                    "source_type": "notebook",
+                    "source_file_id": unsolved.id,
+                    "session_id": session_id,
+                    "cell_index": cell_index,
+                    "cell_type": cell["type"],
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — never let embedding block upload
+            errors.append(f"cell {cell_index} ({cell['type']}): {exc}")
+
+    if errors:
+        unsolved.embedded = False
+        unsolved.embedding_error = "; ".join(errors)
+        logger.warning(
+            "Embedding failed for %d cell(s) of %s (session %d): %s",
+            len(errors), unsolved.original_filename, session_id, unsolved.embedding_error,
+        )
+    else:
+        unsolved.embedded = True
+        unsolved.embedding_error = None
 
 
 def _existing_filename_conflict(
@@ -260,6 +320,8 @@ async def upload_assignment(
                 source_upload_id=upload_row.id,
             )
             db.add(unsolved)
+            db.flush()  # need unsolved.id before building each cell's Chroma id
+            _embed_unsolved_file_cells(unsolved, absolute_path(rel_path), session_id)
             logger.info(
                 "Assignment notebook extracted: %s → session %d (from upload %r)",
                 nb_filename, session_id, filename,

@@ -44,6 +44,7 @@ from app.services.lecture_extraction import (
     extract_pptx_content,
     chunk_slides,
 )
+from app.services.embeddings import upsert_chunk
 from app.services.storage import absolute_path, save_lecture_file
 
 logger = logging.getLogger(__name__)
@@ -143,21 +144,58 @@ async def upload_lecture(
     result = extract_pptx_content(absolute_path(rel_path))
     if result["valid"]:
         chunks = chunk_slides(result["slides"])
+        chunk_rows: list[LectureChunk] = []
         for c in chunks:
-            db.add(
-                LectureChunk(
-                    lecture_file_id=lecture.id,
-                    slide_number=c["slide_number"],
-                    source=c["source"],
-                    chunk_index=c["chunk_index"],
-                    chunk_text=c["chunk_text"],
-                )
+            chunk_row = LectureChunk(
+                lecture_file_id=lecture.id,
+                slide_number=c["slide_number"],
+                source=c["source"],
+                chunk_index=c["chunk_index"],
+                chunk_text=c["chunk_text"],
             )
+            db.add(chunk_row)
+            chunk_rows.append(chunk_row)
         lecture.extracted = True
         logger.info(
             "Lecture file extracted: %s → session %d (%d chunks)",
             filename, session_id, len(chunks),
         )
+
+        # Embedding runs synchronously in this same request (no background
+        # job infra exists in this project) — but a chunk row always exists
+        # regardless of embedding outcome, and embedding failure never blocks
+        # the upload's own success. db.flush() first so each chunk_row.id is
+        # assigned before it's used to build the chunk's deterministic
+        # Chroma id.
+        db.flush()
+        # Zipped with the original chunk dicts (not chunk_row.source) since a
+        # freshly-constructed ORM attribute holds the plain string assigned
+        # to it until the next DB round-trip — chunk_row.source.value would
+        # raise AttributeError here, before any refresh has coerced it into
+        # a real ChunkSource enum member.
+        for c, chunk_row in zip(chunks, chunk_rows):
+            try:
+                upsert_chunk(
+                    chunk_id=f"lecture:{chunk_row.id}",
+                    text=chunk_row.chunk_text,
+                    metadata={
+                        "source_type": "lecture",
+                        "source_file_id": lecture.id,
+                        "session_id": session_id,
+                        "slide_number": c["slide_number"],
+                        "source": c["source"],
+                    },
+                )
+                chunk_row.embedded = True
+                chunk_row.embedding_error = None
+            except Exception as exc:  # noqa: BLE001 — never let embedding block upload
+                chunk_row.embedded = False
+                chunk_row.embedding_error = str(exc)
+                logger.warning(
+                    "Embedding failed for lecture chunk (slide %d, %s) in "
+                    "session %d: %s",
+                    c["slide_number"], c["source"], session_id, exc,
+                )
     else:
         lecture.extracted = False
         lecture.extraction_error = result["error"]

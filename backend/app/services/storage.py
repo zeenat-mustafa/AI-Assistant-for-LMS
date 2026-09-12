@@ -36,6 +36,11 @@ Directory layout under storage_root:
                                                  rejection on this side.
                 extracted/            ← .ipynb files unpacked for grading,
                                          from either a direct upload or a zip
+
+Alongside storage_root (storage/sessions/), not nested under it:
+    storage/chroma/    ← Chroma's persistent vector store (Phase 7.2) — one
+                          global collection, not session-scoped, so it sits
+                          beside storage/sessions/ rather than inside it.
 """
 
 import shutil
@@ -83,6 +88,20 @@ def assignment_originals_dir(session_id: int) -> Path:
 def lecture_dir(session_id: int) -> Path:
     """Directory for a session's instructor-uploaded lecture files (.pptx)."""
     p = _storage_root() / str(session_id) / "lectures"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def chroma_dir() -> Path:
+    """
+    Directory for the Chroma persistent vector store (Phase 7.2).
+
+    Sibling of storage_root ("storage/sessions"), not nested under it —
+    Chroma's collection isn't scoped to one session/upload the way
+    assignments/submissions/lectures are, so it lives at storage/chroma/
+    alongside storage/sessions/, both under the same storage/ root.
+    """
+    p = _storage_root().parent / "chroma"
     p.mkdir(parents=True, exist_ok=True)
     return p
 

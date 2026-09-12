@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, Text, Integer, ForeignKey, DateTime, Enum as SAEnum
+from sqlalchemy import String, Text, Integer, Boolean, ForeignKey, DateTime, Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
 
@@ -23,8 +23,9 @@ class LectureChunk(Base):
     granularity: "Slide 14, speaker notes, part 2" rather than an arbitrary
     length-cut across slide or text/notes boundaries.
 
-    No embedding-related fields here (no vector id, no `embedded` flag) —
-    that is 7.2's job.
+    embedded / embedding_error (Phase 7.2) mirror LectureFile's own
+    extracted/extraction_error pattern: embedding is tracked per chunk, not
+    assumed, and a failure is a real visible reason, never silently dropped.
     """
 
     __tablename__ = "lecture_chunks"
@@ -38,6 +39,13 @@ class LectureChunk(Base):
     # Order of this chunk within its (slide_number, source) pair — 0-based.
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # True once this chunk's text has been embedded and upserted into Chroma
+    # (Phase 7.2). False on failure — the chunk row itself always exists
+    # regardless, matching LectureFile's own convention.
+    embedded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Real failure reason when embedded=False. NULL when embedded=True or not
+    # yet attempted. Never fabricated.
+    embedding_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

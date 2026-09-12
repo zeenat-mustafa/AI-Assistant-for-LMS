@@ -25,6 +25,14 @@ nbformat==5.10.4
 # not assumed from memory.
 python-pptx==1.0.2
 
+# Vector store + embeddings — Phase 7.2. Embedded/file-based Chroma (no
+# separate infra process) + local sentence-transformers (no Gemini embedding
+# API — embedding is higher-volume than grading, and this project's own
+# Gemini fallback chain exists because of a prior quota exhaustion incident).
+# Versions confirmed current-stable via `pip index versions` (2026-09-12).
+chromadb==1.5.9
+sentence-transformers==6.0.1
+
 # Session matching
 rapidfuzz==3.10.1
 

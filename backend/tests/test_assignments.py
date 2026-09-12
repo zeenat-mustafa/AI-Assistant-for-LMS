@@ -477,6 +477,62 @@ class TestUploadAssignment:
 
 
 # ===========================================================================
+# Notebook-cell embedding (Phase 7.2) — synchronous, same request as upload,
+# never blocks the upload's own success. Every other test in this file mocks
+# save_assignment_file to a fake (non-existent) path, so extract_notebook_
+# structure naturally fails fast with "file not found" and upsert_chunk is
+# never reached — safe, but no coverage of the success path. These tests use
+# real (unmocked) storage via tmp_path so embedding genuinely runs, with
+# upsert_chunk itself mocked to avoid touching the real model/Chroma store.
+# ===========================================================================
+
+class TestNotebookEmbedding:
+
+    def test_successful_upload_embeds_every_non_blank_cell(self, client, db, tmp_path):
+        c, instr_token, _ = client
+        nb = _make_notebook_bytes(
+            markdown_cells=["# HW1\nDo task A.", "   "],  # second cell is blank
+            code_cells=["print('hello')", "# TODO: your code here"],
+        )
+
+        with patch("app.services.storage._storage_root", return_value=tmp_path), \
+             patch("app.routers.assignments.upsert_chunk") as mock_upsert:
+            res = _post(c, instr_token, 10, ("hw1.ipynb", nb))
+
+        assert res.status_code == 201
+        notebook = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).one()
+        assert notebook.embedded is True
+        assert notebook.embedding_error is None
+
+        # 4 cells total, 1 blank markdown cell skipped -> 3 embedded.
+        assert mock_upsert.call_count == 3
+        call_ids = {call.kwargs["chunk_id"] for call in mock_upsert.call_args_list}
+        assert call_ids == {
+            f"notebook:{notebook.id}:0",
+            f"notebook:{notebook.id}:2",
+            f"notebook:{notebook.id}:3",
+        }
+        first_call = mock_upsert.call_args_list[0]
+        assert first_call.kwargs["metadata"] == {
+            "source_type": "notebook", "source_file_id": notebook.id,
+            "session_id": 10, "cell_index": 0, "cell_type": "markdown",
+        }
+
+    def test_embedding_failure_marks_file_failed_but_upload_still_succeeds(self, client, db, tmp_path):
+        c, instr_token, _ = client
+        nb = _make_notebook_bytes(markdown_cells=["# HW1\nDo task A."])
+
+        with patch("app.services.storage._storage_root", return_value=tmp_path), \
+             patch("app.routers.assignments.upsert_chunk", side_effect=RuntimeError("chroma unavailable")):
+            res = _post(c, instr_token, 10, ("hw1.ipynb", nb))
+
+        assert res.status_code == 201  # upload itself still succeeds
+        notebook = db.query(UnsolvedFile).filter(UnsolvedFile.session_id == 10).one()
+        assert notebook.embedded is False
+        assert "chroma unavailable" in notebook.embedding_error
+
+
+# ===========================================================================
 # Grading-pipeline preservation — Option (a)'s whole point: none of this
 # changed. These assert on the DB state that file_matcher.py/grading_pipeline
 # actually read, independent of the display-facing API response shape.

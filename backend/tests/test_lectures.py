@@ -59,7 +59,8 @@ def _post(client, token, session_id, filename, data, content_type="application/v
 
 
 def _post_mocked(client, token, session_id, filename, data, **kw):
-    with patch("app.routers.lectures.save_lecture_file", side_effect=_mock_save_lecture):
+    with patch("app.routers.lectures.save_lecture_file", side_effect=_mock_save_lecture), \
+         patch("app.routers.lectures.upsert_chunk"):
         return _post(client, token, session_id, filename, data, **kw)
 
 
@@ -136,7 +137,11 @@ class TestUploadLecture:
         c, instr_token, _, _ = client
         data = _make_pptx_bytes(with_notes=True)
 
-        with patch("app.services.storage._storage_root", return_value=tmp_path):
+        # upsert_chunk (Phase 7.2) is mocked here — this test verifies
+        # extraction/chunk-creation, not embedding, which has its own
+        # dedicated coverage in test_embeddings.py.
+        with patch("app.services.storage._storage_root", return_value=tmp_path), \
+             patch("app.routers.lectures.upsert_chunk"):
             res = _post(c, instr_token, 10, "week1.pptx", data)
 
         assert res.status_code == 201
@@ -153,6 +158,25 @@ class TestUploadLecture:
         sources = {c.source.value for c in chunks}
         assert "slide_text" in sources
         assert "notes" in sources
+        assert all(c.embedded for c in chunks)
+
+    def test_embedding_failure_marks_chunk_failed_but_upload_still_succeeds(self, client, db, tmp_path):
+        """Embedding is never allowed to block the upload's own success —
+        mirrors LectureFile's own extracted/extraction_error convention."""
+        c, instr_token, _, _ = client
+        data = _make_pptx_bytes(with_notes=True)
+
+        with patch("app.services.storage._storage_root", return_value=tmp_path), \
+             patch("app.routers.lectures.upsert_chunk", side_effect=RuntimeError("chroma unavailable")):
+            res = _post(c, instr_token, 10, "week1.pptx", data)
+
+        assert res.status_code == 201  # upload itself still succeeds
+        lecture = db.query(LectureFile).filter(LectureFile.session_id == 10).one()
+        assert lecture.extracted is True  # extraction unaffected by embedding failure
+        chunks = db.query(LectureChunk).filter(LectureChunk.lecture_file_id == lecture.id).all()
+        assert len(chunks) >= 1
+        assert all(c.embedded is False for c in chunks)
+        assert all("chroma unavailable" in (c.embedding_error or "") for c in chunks)
 
     def test_non_instructor_rejected(self, client):
         c, _, _, student_token = client
@@ -266,7 +290,8 @@ class TestDownloadLecture:
         c, instr_token, _, student_token = client
         data = _make_pptx_bytes()
 
-        with patch("app.services.storage._storage_root", return_value=tmp_path):
+        with patch("app.services.storage._storage_root", return_value=tmp_path), \
+             patch("app.routers.lectures.upsert_chunk"):
             upload_res = _post(c, instr_token, 10, "week1.pptx", data)
             assert upload_res.status_code == 201
             lecture_id = upload_res.json()["id"]
