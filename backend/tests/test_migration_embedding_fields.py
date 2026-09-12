@@ -83,7 +83,9 @@ class TestUpgradeAddsTrackingColumns:
         migration) must leave both tables with the two new columns, NOT NULL
         embedded defaulting to false, nullable embedding_error."""
         fresh_db = tmp_path / "fresh.db"
-        result = _run_alembic("upgrade", "head", db_path=fresh_db)
+        # Pinned to THIS_REVISION, not "head" — later migrations (7.4+) move
+        # head forward, and this test is only about this one migration.
+        result = _run_alembic("upgrade", THIS_REVISION, db_path=fresh_db)
         assert result.returncode == 0, result.stderr
         assert THIS_REVISION in _current_heads(fresh_db)
 
@@ -111,6 +113,11 @@ class TestDowngradeIsReversible:
         side effects, and re-upgrading restores them cleanly.
         """
         db = scratch_db_from_real
+
+        # The real DB may already be past this revision (7.4+); step the
+        # scratch copy to exactly THIS_REVISION first so "-1" means this one.
+        result = _run_alembic("downgrade", THIS_REVISION, db_path=db)
+        assert result.returncode == 0, result.stderr
 
         before_lc = _table_info(db, "lecture_chunks")
         before_uf = _table_info(db, "unsolved_files")
@@ -145,7 +152,7 @@ class TestDowngradeIsReversible:
             conn.close()
 
         # Re-upgrade: full round trip must restore both columns cleanly.
-        result = _run_alembic("upgrade", "head", db_path=db)
+        result = _run_alembic("upgrade", THIS_REVISION, db_path=db)
         assert result.returncode == 0, result.stderr
         assert THIS_REVISION in _current_heads(db)
 

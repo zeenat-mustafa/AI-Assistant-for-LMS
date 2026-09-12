@@ -11,6 +11,7 @@ from app.models.submission_file import SubmissionFile
 from app.models.grade import Grade
 from app.models.lecture_file import LectureFile
 from app.models.lecture_chunk import LectureChunk, ChunkSource
+from app.models.conversation import ConversationThread, ConversationMessage, MessageRole
 
 __all__ = [
     "User",
@@ -25,4 +26,7 @@ __all__ = [
     "LectureFile",
     "LectureChunk",
     "ChunkSource",
+    "ConversationThread",
+    "ConversationMessage",
+    "MessageRole",
 ]

@@ -34,6 +34,9 @@ class User(Base):
     graded_grades: Mapped[list["Grade"]] = relationship(  # noqa: F821
         "Grade", back_populates="graded_by_instructor"
     )
+    conversation_threads: Mapped[list["ConversationThread"]] = relationship(  # noqa: F821
+        "ConversationThread", back_populates="student", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r} role={self.role}>"

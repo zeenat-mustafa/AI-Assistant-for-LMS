@@ -50,7 +50,10 @@ from app.services.llm_provider import call_llm
 FIXTURE_SESSION_ID = 7
 FIXTURE_UNSOLVED_FILE_ID = 20  # Week 10_Lab3.ipynb
 
-TRANSCRIPT_PATH = Path(__file__).parent / "transcripts_report.md"
+# 7.3's original evidence stays in transcripts_report.md; 7.4's Standing
+# Rule #7 re-run (same 9 cases, now through the memory-wired prompt layout)
+# writes here so that evidence is never overwritten.
+TRANSCRIPT_PATH = Path(__file__).parent / "transcripts_report_7.4.md"
 
 # Collected across the whole module run, written out once at session end.
 _transcripts: list[dict] = []
