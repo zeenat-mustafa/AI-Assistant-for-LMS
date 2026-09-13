@@ -28,11 +28,14 @@ const deleteAssignmentMock = vi.fn();
 // 5.4 added the roster to this page; it must resolve, or its own error
 // banner becomes a second role="alert" and every assertion here is ambiguous.
 const getGradeReportMock = vi.fn();
+// 7.7 added the Lecture files panel to this page; same reason as above.
+const listLecturesMock = vi.fn();
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
+    listLectures: (...a: unknown[]) => listLecturesMock(...a),
     getSession: (...a: unknown[]) => getSessionMock(...a),
     listAssignments: (...a: unknown[]) => listAssignmentsMock(...a),
     uploadAssignment: (...a: unknown[]) => uploadAssignmentMock(...a),
@@ -104,6 +107,7 @@ async function renderDetail() {
 beforeEach(() => {
   vi.clearAllMocks();
   getSessionMock.mockResolvedValue(sessionWith([]));
+  listLecturesMock.mockResolvedValue([]);
   getGradeReportMock.mockResolvedValue({
     session_id: 5,
     session_title: "Week 3 Day 1",

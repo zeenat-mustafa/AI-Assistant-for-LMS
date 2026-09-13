@@ -55,6 +55,7 @@ import type {
 import { GradesRoster } from "./grades-roster";
 import { RequireAuth } from "@/components/require-auth";
 import { SignedInShell } from "@/components/signed-in-shell";
+import { LectureFilesPanel } from "@/components/lecture-files-panel";
 import { summaryNamesSession, useGradingAnnouncements } from "@/lib/grading-announcements";
 import {
   EmptyState,
@@ -243,6 +244,8 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
         uploads={uploads}
         onDeleted={refreshUploads}
       />
+
+      <LectureFilesPanel sessionId={sessionId} canUpload />
 
       {/*
         Notebooks extracted internally, not the uploads list -- resources are

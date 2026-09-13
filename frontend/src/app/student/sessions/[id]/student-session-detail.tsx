@@ -45,6 +45,7 @@ import { MyGradesPanel } from "./my-grades-panel";
 import { SubmissionUploadPanel } from "./submission-upload-panel";
 import { RequireAuth } from "@/components/require-auth";
 import { SignedInShell } from "@/components/signed-in-shell";
+import { LectureFilesPanel } from "@/components/lecture-files-panel";
 import {
   EmptyState,
   FormError,
@@ -211,6 +212,12 @@ function StudentSessionBody({ sessionId }: { sessionId: number }) {
         <p className="mt-1 text-sm text-slate-600">
           Created {formatDate(session.created_at)}
         </p>
+        <Link
+          href={`/student/sessions/${sessionId}/chat`}
+          className="mt-3 inline-block rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+        >
+          Ask about this session
+        </Link>
       </div>
 
       <SubmissionStatusPanel
@@ -245,6 +252,8 @@ function StudentSessionBody({ sessionId }: { sessionId: number }) {
         sessionId={sessionId}
         uploads={session.assignment_uploads}
       />
+
+      <LectureFilesPanel sessionId={sessionId} canUpload={false} />
     </div>
   );
 }
