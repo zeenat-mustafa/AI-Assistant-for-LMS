@@ -367,6 +367,91 @@ describe("<StudentChat /> — errors", () => {
   });
 });
 
+describe("<StudentChat /> — search all sessions toggle", () => {
+  const toggle = () => screen.getByLabelText("Search all sessions, not only this one");
+
+  it("is off by default, and off sends the page's session id", async () => {
+    await renderChat();
+    expect(toggle()).not.toBeChecked();
+    await ask("q");
+    expect(streamStudentChatMock.mock.calls[0][0]).toEqual({ question: "q", currentSessionId: 7 });
+  });
+
+  it("on sends current_session_id: null", async () => {
+    await renderChat();
+    await userEvent.click(toggle());
+    await ask("q");
+    expect(streamStudentChatMock.mock.calls[0][0]).toEqual({ question: "q", currentSessionId: null });
+  });
+
+  it("wins over a stored resolved id, stays on after a resolution, and off resumes the last resolved id", async () => {
+    streamStudentChatMock
+      .mockImplementationOnce(
+        scripted([{ event: "resolved", session_id: 9, session_title: "Week 9 Day 2", resolution: "redirected" }, done]),
+      )
+      .mockImplementationOnce(
+        scripted([{ event: "resolved", session_id: 4, session_title: "Week 2 Day 2", resolution: "broad_search" }, done]),
+      )
+      .mockImplementationOnce(
+        scripted([{ event: "resolved", session_id: 4, session_title: "Week 2 Day 2", resolution: "broad_search" }, done]),
+      );
+    await renderChat();
+
+    await ask("first");
+    expect(streamStudentChatMock.mock.calls[0][0].currentSessionId).toBe(7);
+
+    await userEvent.click(toggle());
+    await ask("second");
+    expect(streamStudentChatMock.mock.calls[1][0].currentSessionId).toBeNull();
+    await waitFor(() => expect(screen.getAllByTestId("session-banner")).toHaveLength(2));
+    // Not silently flipped off by the resolution.
+    expect(toggle()).toBeChecked();
+
+    await ask("third");
+    expect(streamStudentChatMock.mock.calls[2][0].currentSessionId).toBeNull();
+
+    await userEvent.click(toggle());
+    await ask("fourth");
+    expect(streamStudentChatMock.mock.calls[3][0].currentSessionId).toBe(4);
+  });
+
+  it("renders a broad_search resolution in the banner with the real resolution value", async () => {
+    streamStudentChatMock.mockImplementationOnce(
+      scripted([
+        { event: "resolved", session_id: 4, session_title: "Week 2 Day 2", resolution: "broad_search" },
+        { event: "token", text: "From week 2." },
+        done,
+      ]),
+    );
+    await renderChat();
+    await userEvent.click(toggle());
+    await ask("how does groupby work?");
+    expect(await screen.findByTestId("session-banner")).toHaveTextContent("Answering from Week 2 Day 2 (broad_search)");
+    expect(screen.getByRole("heading", { name: /ask about week 10 day 3/i })).toBeInTheDocument();
+  });
+
+  it("with the toggle on, choosing a clarification candidate still sends that candidate's id", async () => {
+    streamStudentChatMock.mockImplementationOnce(
+      scripted(
+        [
+          {
+            event: "clarification_needed",
+            message: "Which session?",
+            candidates: [{ session_id: 6, session_title: "Week 10 Day 2", best_similarity: 0.58 }],
+          },
+        ],
+        "clarification",
+      ),
+    );
+    await renderChat();
+    await userEvent.click(toggle());
+    await ask("What is the TODO in this lab?");
+    await userEvent.click(await screen.findByRole("button", { name: /similarity/ }));
+    await waitFor(() => expect(streamStudentChatMock).toHaveBeenCalledTimes(2));
+    expect(streamStudentChatMock.mock.calls[1][0]).toEqual({ question: "What is the TODO in this lab?", currentSessionId: 6 });
+  });
+});
+
 describe("<StudentChat /> — clarification", () => {
   it("renders one button per candidate and resends the identical question as a new visible turn", async () => {
     const original = "What should I do for the TODO in this assignment?";

@@ -12,6 +12,12 @@
  *    `broad_search`); that turn then shows a visible banner naming it.
  *  - Follow-ups send the previous turn's resolved session id, per 7.5's
  *    contract; the first turn of a visit sends this page's session id.
+ *  - "Search all sessions" (per visit, never persisted) sends
+ *    `current_session_id: null`, which is the only way the backend's
+ *    clarification and broad_search paths can be reached. While it is on it
+ *    wins over the stored resolved id for every typed turn; turning it off
+ *    resumes the last resolved id. Choosing a clarification candidate always
+ *    sends that candidate's id -- it is the student's explicit answer.
  *  - Scope safety ("explain, never solve") is enforced in the backend's
  *    system prompt. This page adds no filtering and no solve-style shortcuts.
  *  - No "Stop" control: aborting the fetch has not been shown to stop the
@@ -83,6 +89,7 @@ function StudentChatBody({ sessionId }: { sessionId: number }) {
   const [question, setQuestion] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [quizFormOpen, setQuizFormOpen] = useState(false);
+  const [searchAll, setSearchAll] = useState(false);
 
   const nextId = useRef(1);
   /** `current_session_id` for the next turn (A2). */
@@ -125,7 +132,7 @@ function StudentChatBody({ sessionId }: { sessionId: number }) {
   );
 
   const send = useCallback(
-    async (text: string, currentSessionId: number) => {
+    async (text: string, currentSessionId: number | null) => {
       const id = nextId.current++;
       setEntries((current) => [
         ...current,
@@ -195,7 +202,7 @@ function StudentChatBody({ sessionId }: { sessionId: number }) {
     if (streaming || !question.trim()) return;
     const text = question;
     setQuestion("");
-    void send(text, nextSessionId.current);
+    void send(text, searchAll ? null : nextSessionId.current);
   }
 
   if (loadError) {
@@ -280,6 +287,22 @@ function StudentChatBody({ sessionId }: { sessionId: number }) {
           ) : (
             <SmallButton onClick={() => setQuizFormOpen(true)}>Quiz me</SmallButton>
           )}
+
+          <div>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={searchAll}
+                onChange={(e) => setSearchAll(e.target.checked)}
+              />
+              Search all sessions, not only this one
+            </label>
+            <p className="mt-1 text-xs text-slate-500">
+              When on, your question is matched against course material from every session
+              instead of only {session.title}, and the assistant may ask which session you mean.
+              It stays on until you turn it off, and resets when you leave this page.
+            </p>
+          </div>
 
           <form
             onSubmit={(e) => {
