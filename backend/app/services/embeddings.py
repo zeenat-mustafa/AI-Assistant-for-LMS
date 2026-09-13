@@ -122,6 +122,21 @@ def upsert_chunk(chunk_id: str, text: str, metadata: dict) -> None:
     )
 
 
+def delete_chunks(chunk_ids: list[str]) -> None:
+    """
+    Remove chunks from the Chroma collection by id.
+
+    Used when a chunk must stop being retrievable entirely (as opposed to
+    upsert_chunk, which updates one) — e.g. a confirmed cross-file solution
+    leak (see app.services.embedding_exclusions) that was embedded before
+    the exclusion existed. A no-op id (already absent) is not an error.
+    """
+    if not chunk_ids:
+        return
+    collection = get_chroma_collection()
+    collection.delete(ids=chunk_ids)
+
+
 # ── Read path ─────────────────────────────────────────────────────────────────
 
 def retrieve(

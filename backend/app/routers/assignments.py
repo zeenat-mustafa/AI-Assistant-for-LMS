@@ -41,6 +41,7 @@ from app.models.resource_file import ResourceFile
 from app.models.user import User
 from app.schemas.assignment_upload import AssignmentUploadRead
 from app.services.auth import get_current_user, require_instructor
+from app.services.embedding_exclusions import EXCLUDED_CELLS, is_excluded_from_embedding
 from app.services.embeddings import upsert_chunk
 from app.services.storage import (
     absolute_path,
@@ -153,6 +154,16 @@ def _embed_unsolved_file_cells(unsolved: UnsolvedFile, abs_path: Path, session_i
         content = cell["content"]
         if not content or not content.strip():
             continue  # nothing meaningful to embed or retrieve
+        if is_excluded_from_embedding(unsolved.id, cell_index):
+            # Confirmed cross-file solution leak (see embedding_exclusions.py)
+            # — never embedded, treated like a blank cell for embedded/
+            # embedding_error purposes since this is deliberate, not a failure.
+            logger.info(
+                "Skipping embedding for excluded cell %d of %s (id=%s): %s",
+                cell_index, unsolved.original_filename, unsolved.id,
+                EXCLUDED_CELLS[(unsolved.id, cell_index)],
+            )
+            continue
         try:
             upsert_chunk(
                 chunk_id=f"notebook:{unsolved.id}:{cell_index}",

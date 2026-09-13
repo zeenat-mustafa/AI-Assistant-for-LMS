@@ -28,6 +28,7 @@ from app.config import settings  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models.lecture_chunk import LectureChunk  # noqa: E402
 from app.models.unsolved_file import UnsolvedFile  # noqa: E402
+from app.services.embedding_exclusions import EXCLUDED_CELLS, is_excluded_from_embedding  # noqa: E402
 from app.services.embeddings import upsert_chunk  # noqa: E402
 from app.services.notebook import extract_notebook_structure  # noqa: E402
 from app.services.storage import absolute_path  # noqa: E402
@@ -128,6 +129,16 @@ def backfill_unsolved_files(db) -> tuple[int, int, int, int]:
         for cell_index, cell in enumerate(structure["cells"]):
             content = cell["content"]
             if not content or not content.strip():
+                cells_skipped += 1
+                continue
+            if is_excluded_from_embedding(unsolved.id, cell_index):
+                # Confirmed cross-file solution leak (embedding_exclusions.py)
+                # — never embedded; counted with the skipped cells since this
+                # is deliberate, not a parsing/embedding failure.
+                logger.info(
+                    "Skipping embedding for excluded cell %d of UnsolvedFile id=%s: %s",
+                    cell_index, unsolved.id, EXCLUDED_CELLS[(unsolved.id, cell_index)],
+                )
                 cells_skipped += 1
                 continue
             try:
