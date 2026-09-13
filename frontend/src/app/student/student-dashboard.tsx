@@ -66,6 +66,11 @@ export function StudentDashboard() {
         <p className="mt-1 text-sm text-slate-600">
           Open a session to download its assignment files.
         </p>
+        <p className="mt-1 text-sm">
+          <Link href="/student/quizzes" className="text-slate-500 underline">
+            Practice quiz history
+          </Link>
+        </p>
       </div>
 
       <Panel title="All sessions">
