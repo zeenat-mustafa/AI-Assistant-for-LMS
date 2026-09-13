@@ -88,19 +88,7 @@ def extract_pptx_content(file_path: Union[str, Path]) -> dict:
             )
             return result
 
-        slides: list[dict] = []
-        for slide_number, slide in enumerate(prs.slides, start=1):
-            slide_text = _extract_slide_text(slide)
-            notes_text = _extract_notes_text(slide)
-            slides.append(
-                {
-                    "slide_number": slide_number,
-                    "slide_text": slide_text,
-                    "notes_text": notes_text,
-                }
-            )
-
-        result["slides"] = slides
+        result["slides"] = _slides_from_presentation(prs)
         result["valid"] = True
         return result
 
@@ -110,7 +98,59 @@ def extract_pptx_content(file_path: Union[str, Path]) -> dict:
         return result
 
 
+def extract_pptx_content_from_bytes(data: bytes) -> dict:
+    """
+    Same as extract_pptx_content, for a .pptx held only in memory — Phase 7.6's
+    one-off quiz upload, which must never be written to disk by this project's
+    code. Parsed from an io.BytesIO buffer, never a temp file. Same return
+    shape, same never-raises guarantee, same per-slide parsing core.
+    """
+    result: dict = {"slides": [], "valid": False, "error": None}
+
+    try:
+        if not data:
+            result["error"] = "File is empty."
+            return result
+
+        import io
+        from zipfile import BadZipFile
+
+        from pptx import Presentation
+        from pptx.exc import PackageNotFoundError
+
+        try:
+            prs = Presentation(io.BytesIO(data))
+        except (PackageNotFoundError, BadZipFile):
+            result["error"] = (
+                "File does not appear to be a valid .pptx package (corrupted "
+                "or not actually PowerPoint format)."
+            )
+            return result
+
+        result["slides"] = _slides_from_presentation(prs)
+        result["valid"] = True
+        return result
+
+    except Exception as exc:  # noqa: BLE001 — deliberate catch-all, see docstring
+        logger.warning("Failed to extract in-memory .pptx content: %s", exc)
+        result["error"] = f"Failed to parse .pptx file: {exc}"
+        return result
+
+
 # ── Internal helpers ─────────────────────────────────────────────────────────
+
+def _slides_from_presentation(prs) -> list[dict]:
+    """The per-slide parsing core shared by the path- and bytes-based extractors."""
+    slides: list[dict] = []
+    for slide_number, slide in enumerate(prs.slides, start=1):
+        slides.append(
+            {
+                "slide_number": slide_number,
+                "slide_text": _extract_slide_text(slide),
+                "notes_text": _extract_notes_text(slide),
+            }
+        )
+    return slides
 
 def _extract_slide_text(slide) -> str:
     """

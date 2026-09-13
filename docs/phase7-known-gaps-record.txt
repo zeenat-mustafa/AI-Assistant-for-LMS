@@ -1,0 +1,99 @@
+Phase 7 — Known Gaps Record
+============================
+Gaps accepted by design (or found and deliberately deferred) during Phase 7
+(RAG + memory-aware student chatbot + in-chat quizzes). Not bugs to "fix"
+without being asked. 7.1-7.5's gaps are recorded in CLAUDE.md's Phase 7
+status section; this file starts at 7.6. See docs/phase5-known-gaps-record.txt
+for the previous phase.
+
+Sub-feature 7.6 (student practice quizzes)
+------------------------------------------------------------------------
+- FOUR EXISTING CHROMA ENTRIES HOLD RAW BASE64 IMAGE NOISE (found in 7.6
+  review; deferred, not re-embedded). Two markdown cells in each of these
+  unsolved notebooks (both session 4, "Week 2 Day 2") are a single embedded
+  image and nothing else:
+
+    dataframe_basics.ipynb  (unsolved_files.id=10)
+      notebook:10:55  (cell 56, 1-indexed)  80,886 chars  group_by_cities.png
+      notebook:10:62  (cell 63, 1-indexed) 140,038 chars  split_apply_combine.png
+    pandas_group_by.ipynb   (unsolved_files.id=11)
+      notebook:11:8   (cell 9, 1-indexed)   80,886 chars  same image
+      notebook:11:15  (cell 16, 1-indexed) 140,038 chars  same image
+
+  7.2 embedded them without any error (unsolved_files.embedded=1,
+  embedding_error NULL). The stored Chroma DOCUMENT is the full raw
+  `![...](data:image/png;base64,...)` string, and the VECTOR represents only
+  its first 256 tokens (all-MiniLM-L6-v2's max_seq_length silently truncates
+  the rest) — i.e. base64 noise. Functionally near-meaningless vectors for
+  those four chunks: not a security leak (no answer or student data is in
+  them), but a real retrieval-quality gap. They are very unlikely to clear
+  the 0.35 similarity threshold for a real question; if one ever did, 7.5
+  would put the raw base64 document into the chat prompt and its citation
+  snippet.
+
+  THIS IS A CROSS-FEATURE EXPOSURE, AND ONLY 7.6's SIDE OF IT IS CLOSED.
+  7.6's topic-mode fix stops quiz generation from ever surfacing these four
+  entries, but 7.5's student-chat retrieval (POST /student-chat/stream)
+  reads Chroma's stored document field directly with no equivalent
+  protection — if a student's chat question retrieved one of these entries
+  today, the raw base64 would still reach the chat prompt. Do not read this
+  entry as fixed: the recommended backfill below is what resolves both
+  consumers (quiz and chat) at once, and it has not been run.
+
+  Root cause fixed going forward (7.6): extract_notebook_structure() and
+  extract_notebook_structure_from_bytes() gained an opt-in
+  strip_images=True, which replaces embedded base64 images with
+  "[image omitted]". It is on for the upload embedding flow
+  (routers/assignments.py) and scripts/backfill_embeddings.py, so no future
+  upload or backfill embeds image payloads. It is deliberately OFF (default)
+  for grading and rubric generation (evaluator.py, rubric.py), whose prompts
+  stay byte-identical; six real student submission notebooks in session 4
+  contain these same images, and changing grading input would need its own
+  re-verification pass. The quiz (7.6) is not affected by the stale entries:
+  it reads notebook text from the source files with strip_images=True, and
+  topic mode uses the re-read cell text, never Chroma's stored document.
+
+  RECOMMENDED FOLLOW-UP (not done): once the 7.6 fix is committed, re-embed
+  just those two files with strip_images=True. Note that
+  scripts/backfill_embeddings.py only processes UnsolvedFile rows with
+  embedded=False, so re-running it as-is does nothing for these files — the
+  follow-up must first set embedded=False for ids 10 and 11 (after a
+  sqlite3 backup-API DB backup), then run the script. Chunk ids are
+  deterministic, so the upsert overwrites the four entries in place rather
+  than duplicating them.
+
+- A MULTI-SESSION QUIZ CAN MIX TOPICALLY UNRELATED MATERIAL INTO ONE
+  NONSENSICAL QUESTION. Real example from 7.6's re-verification: a
+  multiple_sessions quiz over sessions [4, 8] (pandas notebooks + the
+  AI-agents lecture) produced, as Q2: "In the Split-Apply-Combine procedure
+  demonstrated with Pandas GroupBy objects, what primary role does
+  short-term memory or tracking play when compared against the agent
+  execution loop discussed in later sessions?" Its source_citation was
+  correct (week 10_day1.pptx, slide 10) and its marked answer is correct for
+  that slide, but the question itself blends two unrelated topics and makes
+  no sense.
+
+  This is a real, disclosed quality limitation of combining material from
+  topically unrelated sessions in one quiz — not a leak (nothing from a
+  completion gap is revealed), and not something to be fixed by altering
+  the already-signed-off quiz-generation prompt. The other 4 questions in
+  that quiz, and every single-topic quiz verified in 7.6, did not show it.
+
+- REPEAT QUIZZES ON A SMALL NOTEBOOK ARE VERY SIMILAR. Material sampling
+  only varies a quiz when a scope's material exceeds the 40k-character
+  budget. After the heuristic_hint and hint-cell filters, Week 10_Lab3.ipynb
+  has about 2,200 characters of usable text, all of which is sent every
+  time, so repeat quizzes on it ask near-identical questions. Accepted
+  trade-off of excluding hint cells (7.6 review).
+
+- THE HINT-CELL FILTER EXCLUDES ANY CELL CONTAINING THE WORD "hint"/"hints".
+  One whole-word, case-insensitive rule (quiz_generator.is_hint_cell), chosen
+  over heading/label patterns because every real hint note found contains the
+  word and the one real 💡-non-hint ("💡 Inspiration:") does not. It will
+  also drop a cell using the word in ordinary prose ("a hint of
+  seasonality"); no real course notebook does this today. Quiz-only — it
+  does not change what embedding, chat, or grading see.
+
+- QUIZ CITATIONS SHOW NOTEBOOK CELLS 1-INDEXED ("cell 7"); 7.5's student-chat
+  citations return the raw 0-based cell_index. Known, accepted cosmetic
+  inconsistency; 7.5 deliberately not changed.

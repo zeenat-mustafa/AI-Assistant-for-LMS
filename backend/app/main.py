@@ -21,7 +21,7 @@ from app.database import engine, SessionLocal
 # Import models so SQLAlchemy metadata is populated before create_all().
 import app.models  # noqa: F401
 
-from app.routers import auth, sessions, assignments, submissions, grades, chat, lectures, student_chat
+from app.routers import auth, sessions, assignments, submissions, grades, chat, lectures, student_chat, quiz
 from app.services.auth import seed_demo_users
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -100,6 +100,7 @@ app.include_router(submissions.router, prefix=API_PREFIX)
 app.include_router(grades.router,      prefix=API_PREFIX)
 app.include_router(chat.router,        prefix=API_PREFIX)
 app.include_router(student_chat.router, prefix=API_PREFIX)
+app.include_router(quiz.router,        prefix=API_PREFIX)
 
 
 # ── Health check ─────────────────────────────────────────────────────────────

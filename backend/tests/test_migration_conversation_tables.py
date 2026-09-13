@@ -92,7 +92,9 @@ class TestUpgradeCreatesConversationTables:
 
     def test_fresh_db_upgrade_head_creates_both_tables(self, tmp_path):
         fresh_db = tmp_path / "fresh.db"
-        result = _run_alembic("upgrade", "head", db_path=fresh_db)
+        # Pinned to THIS_REVISION, not "head" — later migrations (7.6+) move
+        # head forward, and this test is only about this one migration.
+        result = _run_alembic("upgrade", THIS_REVISION, db_path=fresh_db)
         assert result.returncode == 0, result.stderr
         assert THIS_REVISION in _current_heads(fresh_db)
 
@@ -146,8 +148,12 @@ class TestDowngradeIsReversible:
         db = scratch_db_from_real
 
         # The scratch copy starts at whatever the real DB is at; bring it to
-        # this revision first (a no-op if the real DB is already upgraded).
-        assert _run_alembic("upgrade", "head", db_path=db).returncode == 0
+        # exactly this revision first — up if the real DB is behind, down if a
+        # later migration (7.6+) has already been applied.
+        assert _run_alembic("upgrade", THIS_REVISION, db_path=db).returncode == 0
+        result = _run_alembic("downgrade", THIS_REVISION, db_path=db)
+        assert result.returncode == 0, result.stderr
+        assert THIS_REVISION in _current_heads(db)
         assert set(NEW_TABLES) <= _tables(db)
         counts_before = _row_counts(db)
 
@@ -157,7 +163,7 @@ class TestDowngradeIsReversible:
         assert not (set(NEW_TABLES) & _tables(db))
         assert _row_counts(db) == counts_before
 
-        result = _run_alembic("upgrade", "head", db_path=db)
+        result = _run_alembic("upgrade", THIS_REVISION, db_path=db)
         assert result.returncode == 0, result.stderr
         assert THIS_REVISION in _current_heads(db)
         assert set(NEW_TABLES) <= _tables(db)

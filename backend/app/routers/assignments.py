@@ -135,7 +135,10 @@ def _embed_unsolved_file_cells(unsolved: UnsolvedFile, abs_path: Path, session_i
     """
     from app.services.notebook import extract_notebook_structure
 
-    structure = extract_notebook_structure(str(abs_path))
+    # strip_images: an embedded base64 image is not instructional text, and
+    # the model only reads the first 256 tokens — embedding it produced
+    # near-meaningless vectors (found in 7.6). Stored as "[image omitted]".
+    structure = extract_notebook_structure(str(abs_path), strip_images=True)
     if not structure["valid"]:
         unsolved.embedded = False
         unsolved.embedding_error = structure["error"]

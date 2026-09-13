@@ -111,7 +111,9 @@ def backfill_unsolved_files(db) -> tuple[int, int, int, int]:
     files = db.query(UnsolvedFile).filter(UnsolvedFile.embedded.is_(False)).all()
     files_embedded = files_failed = cells_embedded = cells_skipped = 0
     for unsolved in files:
-        structure = extract_notebook_structure(str(absolute_path(unsolved.file_path)))
+        # strip_images, matching the upload flow: base64 images are stored as
+        # "[image omitted]", never embedded as raw payload (found in 7.6).
+        structure = extract_notebook_structure(str(absolute_path(unsolved.file_path)), strip_images=True)
         if not structure["valid"]:
             unsolved.embedded = False
             unsolved.embedding_error = structure["error"]
