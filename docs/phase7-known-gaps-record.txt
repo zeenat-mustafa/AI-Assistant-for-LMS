@@ -8,8 +8,10 @@ for the previous phase.
 
 Sub-feature 7.6 (student practice quizzes)
 ------------------------------------------------------------------------
-- FOUR EXISTING CHROMA ENTRIES HOLD RAW BASE64 IMAGE NOISE (found in 7.6
-  review; deferred, not re-embedded). Two markdown cells in each of these
+- [RESOLVED 2026-09-13 by the follow-up backfill — see "RESOLUTION" at the
+  end of this entry; kept as a record of what happened and why.]
+  FOUR EXISTING CHROMA ENTRIES HELD RAW BASE64 IMAGE NOISE (found in 7.6
+  review; deferred at the time, re-embedded afterwards). Two markdown cells in each of these
   unsolved notebooks (both session 4, "Week 2 Day 2") are a single embedded
   image and nothing else:
 
@@ -31,7 +33,8 @@ Sub-feature 7.6 (student practice quizzes)
   would put the raw base64 document into the chat prompt and its citation
   snippet.
 
-  THIS IS A CROSS-FEATURE EXPOSURE, AND ONLY 7.6's SIDE OF IT IS CLOSED.
+  THIS WAS A CROSS-FEATURE EXPOSURE; WHEN 7.6 WAS COMMITTED, ONLY 7.6's SIDE
+  OF IT WAS CLOSED. (Paragraph kept as written at 7.6 commit time.)
   7.6's topic-mode fix stops quiz generation from ever surfacing these four
   entries, but 7.5's student-chat retrieval (POST /student-chat/stream)
   reads Chroma's stored document field directly with no equivalent
@@ -61,6 +64,50 @@ Sub-feature 7.6 (student practice quizzes)
   sqlite3 backup-API DB backup), then run the script. Chunk ids are
   deterministic, so the upsert overwrites the four entries in place rather
   than duplicating them.
+
+  RESOLUTION (2026-09-13, on phase-7 at 9224e60 — a data-only operation, no
+  code change). Before acting, a sqlite3 backup-API backup was taken
+  (lms.db.pre-backfill-10-11-backup-20260913-183658, integrity_check ok;
+  the script also took its own, ...pre-embedding-backfill-backup-20260913-
+  183907). embedded was reset to False on unsolved_files 10 and 11 only
+  (exactly 2 rows; no other file was unembedded, 0 unembedded lecture
+  chunks), then scripts/backfill_embeddings.py ran: files_embedded=2,
+  cells_embedded=119, cells_skipped(blank)=6, files_failed=0, lecture chunks
+  embedded=0.
+
+  Verified afterwards, against a recorded pre-state:
+    - The same four ids were overwritten in place (upsert, no new ids): each
+      document went from 80,886 / 140,038 chars to "[image omitted]" (15).
+    - No duplicates: Chroma total still 879; files 10/11 still 119 entries
+      with the identical id set (the backfill rewrites every cell of both
+      files, not just the four). The other 115 entries of 10/11 came back
+      with identical text and bit-identical vectors (max drift 0.0).
+    - Every other entry untouched: a hash over id + document + metadata +
+      vector for all 760 other entries is identical before and after.
+    - Both flags back to embedded=1; grades and unsolved_files rows identical
+      to the backup; no document anywhere in Chroma contains a base64 image.
+
+  THRESHOLD FINDING — THE LEAK WAS LIVE, NOT JUST DEFENSE IN DEPTH. The
+  vectors were not pure noise: the image filename (split_apply_combine.png,
+  group_by_cities.png) sits inside the first 256 tokens, so ordinary
+  questions matched them. Before the backfill, the real embeddings.retrieve()
+  with 7.5's own answer settings (session 4, top_k=5, min_similarity=0.35)
+  returned notebook:10:62 and notebook:11:15 at 0.4405 for "split apply
+  combine diagram" — two full 140,038-char base64 documents that 7.5 would
+  have put into the chat prompt and its citation snippets. A broad search
+  (top_k=10, 0.35 — the resolver's broad search and 7.6's topic retrieval)
+  also returned notebook:10:55 and notebook:11:8 at 0.4539 for "what does the
+  group by cities diagram show". 7.6's quiz was already protected (it
+  re-reads stripped source cells); 7.5's chat was genuinely exposed.
+
+  After the backfill, the same queries score the four entries at 0.1491 and
+  0.0696 (session-4 ranks 3 → 65 and 6 → 134); the real 7.5 retrieval returns
+  none of them; the assembled 7.5 prompt and citation snippets, and 7.6's
+  topic material, contain no base64. BOTH CONSUMERS ARE NOW PROTECTED.
+  Residual, harmless: the four "[image omitted]" entries still match
+  image-generic queries (e.g. "png image" at 0.4544, session-4 ranks 3-6), so
+  they can occupy retrieval slots with 15 chars of placeholder text — a
+  minor retrieval-quality note, not a leak.
 
 - A MULTI-SESSION QUIZ CAN MIX TOPICALLY UNRELATED MATERIAL INTO ONE
   NONSENSICAL QUESTION. Real example from 7.6's re-verification: a
