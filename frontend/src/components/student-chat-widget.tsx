@@ -451,7 +451,7 @@ function ChatTurnView({
                       onClick={() => onChooseCandidate(candidate.session_id)}
                       disabled={disabled}
                     >
-                      {candidate.session_title} ({candidate.best_similarity})
+                      {candidate.session_title}
                     </SmallButton>
                   ))}
                 </div>

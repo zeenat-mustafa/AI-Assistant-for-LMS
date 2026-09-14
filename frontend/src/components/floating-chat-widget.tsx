@@ -360,10 +360,7 @@ function OutcomeView({ outcome }: { outcome: ChatEarlyExit }) {
         <ul className="mt-1 list-inside list-disc text-xs text-neutral-600">
           {outcome.candidates.map((candidate) => (
             <li key={candidate.session_id}>
-              {candidate.session_title}{" "}
-              <span className="text-neutral-400">
-                ({Math.round(candidate.confidence * 100)}% match)
-              </span>
+              {candidate.session_title}
             </li>
           ))}
         </ul>
