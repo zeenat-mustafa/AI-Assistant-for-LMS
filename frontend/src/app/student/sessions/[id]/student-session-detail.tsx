@@ -1,30 +1,16 @@
 "use client";
 
 /**
- * Student's view of one session: submission status, upload, own grades, and
- * the session's downloadable files.
+ * Student session detail — Phase 7.8
  *
- * One list: exactly what the instructor uploaded
- * ------------------------------------------------
- * bugfix-original-upload-preservation: assignment files are shown and
- * downloaded as one list of AssignmentUpload rows -- a zip is one row with
- * its own filename, never a browsable list of the notebooks/resources
- * extracted from it. A student who needs one notebook out of a bundled zip
- * downloads the zip and extracts it themselves; there is deliberately no way
- * to download just the piece inside it anymore, on either the instructor or
- * student side.
+ * Rendered inside the right pane of SessionShell at
+ * /student/sessions/[id]. SignedInShell and BackLink removed —
+ * the shell handles header and sidebar navigation.
  *
- * Every endpoint used is gated on `get_current_user`, not `require_instructor`,
- * so 5.3's authenticated blob-download helper works unchanged with a student
- * token — verified, not assumed.
- *
- * Upload and grades live on this one page on purpose: /grades/mine is
- * per-session, and an upload can destroy the grades shown here, so the two
- * have to stay in step. See submission-upload-panel.tsx and my-grades-panel.tsx.
+ * All data-fetching and feature logic unchanged from 7.7.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 
 import {
   ApiError,
@@ -50,21 +36,15 @@ import {
   EmptyState,
   FormError,
   Loading,
-  Panel,
   SmallButton,
 } from "@/components/ui";
 import { formatDate } from "@/lib/format";
 import { triggerBlobDownload } from "@/lib/download";
+import { SessionShell } from "@/components/session-shell";
+import type { SessionListItem } from "@/components/session-shell";
+import { loadAllSessions } from "@/app/student/student-dashboard";
 
-export function StudentSessionDetail({ sessionId }: { sessionId: number }) {
-  return (
-    <RequireAuth role="student">
-      <SignedInShell>
-        <StudentSessionBody sessionId={sessionId} />
-      </SignedInShell>
-    </RequireAuth>
-  );
-}
+// ── Data loaders (unchanged) ──────────────────────────────────────────────────
 
 async function loadSession(
   sessionId: number,
@@ -78,11 +58,6 @@ async function loadSession(
   }
 }
 
-/**
- * `GET /sessions/{id}/submissions/mine` answers 200 with a `null` body when
- * the student has not submitted — it is NOT a 404. So "no submission yet" is
- * a successful, expected result and must never surface as an error.
- */
 async function loadMySubmission(
   sessionId: number,
 ): Promise<{ submission: SubmissionRead | null } | { error: string }> {
@@ -98,7 +73,6 @@ async function loadMySubmission(
   }
 }
 
-/** Same discard-if-stale shape as the loaders above. */
 async function loadMyGrades(
   sessionId: number,
 ): Promise<{ grades: GradeSummary } | { error: string }> {
@@ -111,35 +85,79 @@ async function loadMyGrades(
   }
 }
 
+// ── Public export ─────────────────────────────────────────────────────────────
+
+export function StudentSessionDetail({ sessionId }: { sessionId: number }) {
+  return (
+    <RequireAuth role="student">
+      <SignedInShell fullWidth>
+        <StudentSessionWithShell sessionId={sessionId} />
+      </SignedInShell>
+    </RequireAuth>
+  );
+}
+
+// ── Shell wrapper ─────────────────────────────────────────────────────────────
+
+function StudentSessionWithShell({ sessionId }: { sessionId: number }) {
+  const [allSessions, setAllSessions] = useState<SessionListItem[]>([]);
+  const [shellLoading, setShellLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadAllSessions().then((result) => {
+      if (cancelled) return;
+      if ("sessions" in result) {
+        setAllSessions(
+          result.sessions.map((s) => ({
+            id: s.id,
+            title: s.title,
+            created_at: s.created_at,
+            file_count: s.unsolved_files.length,
+          })),
+        );
+      }
+      setShellLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  return (
+    <SessionShell
+      sessions={allSessions}
+      selectedId={sessionId}
+      onSelect={() => {/* navigation handled by Link inside SessionShell */}}
+      hrefBase="/student/sessions"
+      listLabel="Sessions"
+      loading={shellLoading}
+    >
+      <StudentSessionBody sessionId={sessionId} />
+    </SessionShell>
+  );
+}
+
+// ── Detail body (logic unchanged) ─────────────────────────────────────────────
+
 function StudentSessionBody({ sessionId }: { sessionId: number }) {
   const [session, setSession] = useState<SessionRead | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // `undefined` = still loading; `null` = loaded, nothing submitted.
   const [submission, setSubmission] = useState<SubmissionRead | null | undefined>(undefined);
   const [submissionError, setSubmissionError] = useState<string | null>(null);
 
   const [grades, setGrades] = useState<GradeSummary | undefined>(undefined);
   const [gradesError, setGradesError] = useState<string | null>(null);
 
-  /** Re-read the student's own submission -- used after upload and after a per-item delete. */
   const refreshSubmission = useCallback(async () => {
     const result = await loadMySubmission(sessionId);
-    if ("error" in result) {
-      setSubmissionError(result.error);
-      return;
-    }
+    if ("error" in result) { setSubmissionError(result.error); return; }
     setSubmission(result.submission);
     setSubmissionError(null);
   }, [sessionId]);
 
-  /** Re-read grades. Called on mount, after an upload, and after a delete that removed a graded file. */
   const refreshGrades = useCallback(async () => {
     const result = await loadMyGrades(sessionId);
-    if ("error" in result) {
-      setGradesError(result.error);
-      return;
-    }
+    if ("error" in result) { setGradesError(result.error); return; }
     setGrades(result.grades);
     setGradesError(null);
   }, [sessionId]);
@@ -148,79 +166,58 @@ function StudentSessionBody({ sessionId }: { sessionId: number }) {
     let cancelled = false;
     void loadSession(sessionId).then((result) => {
       if (cancelled) return;
-      if ("error" in result) {
-        setLoadError(result.error);
-        return;
-      }
+      if ("error" in result) { setLoadError(result.error); return; }
       setSession(result.session);
       setLoadError(null);
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [sessionId]);
 
   useEffect(() => {
     let cancelled = false;
     void loadMySubmission(sessionId).then((result) => {
       if (cancelled) return;
-      if ("error" in result) {
-        setSubmissionError(result.error);
-        setSubmission(null);
-        return;
-      }
+      if ("error" in result) { setSubmissionError(result.error); setSubmission(null); return; }
       setSubmission(result.submission);
       setSubmissionError(null);
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [sessionId]);
 
   useEffect(() => {
     let cancelled = false;
     void loadMyGrades(sessionId).then((result) => {
       if (cancelled) return;
-      if ("error" in result) {
-        setGradesError(result.error);
-        return;
-      }
+      if ("error" in result) { setGradesError(result.error); return; }
       setGrades(result.grades);
       setGradesError(null);
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [sessionId]);
 
-  if (loadError) {
-    return (
-      <>
-        <BackLink />
-        <FormError>{loadError}</FormError>
-      </>
-    );
-  }
-
-  if (!session) return <Loading>Loading session…</Loading>;
+  if (loadError) return <FormError>{loadError}</FormError>;
+  if (!session) return <Loading>Loading session details...</Loading>;
 
   return (
-    <div className="space-y-8">
-      <div>
-        <BackLink />
-        <h1 className="mt-2 text-2xl font-semibold text-slate-900">{session.title}</h1>
-        <p className="mt-1 text-sm text-slate-600">
+    <div className="space-y-6">
+      {/* Session header */}
+      <div className="border-b border-neutral-200 pb-4">
+        <h1 className="text-2xl font-semibold text-neutral-900">{session.title}</h1>
+        <p className="mt-1 text-sm text-neutral-500">
           Created {formatDate(session.created_at)}
         </p>
       </div>
+
+      <AssignmentFilesPanel
+        sessionId={sessionId}
+        uploads={session.assignment_uploads}
+      />
 
       <SubmissionStatusPanel
         sessionId={sessionId}
         submission={submission}
         error={submissionError}
         onDeleted={async () => {
-          // A delete can remove a graded file (after explicit confirm), so
-          // both the upload list and the grade display need a fresh read.
           await refreshSubmission();
           await refreshGrades();
         }}
@@ -242,31 +239,81 @@ function StudentSessionBody({ sessionId }: { sessionId: number }) {
         totalAssignmentFiles={session.unsolved_files.length}
       />
 
-      <AssignmentFilesPanel
-        sessionId={sessionId}
-        uploads={session.assignment_uploads}
-      />
-
       <LectureFilesPanel sessionId={sessionId} canUpload={false} />
     </div>
   );
 }
 
-function BackLink() {
+// ── Assignment files panel ────────────────────────────────────────────────────
+
+function AssignmentFilesPanel({
+  sessionId,
+  uploads,
+}: {
+  sessionId: number;
+  uploads: AssignmentUploadRead[];
+}) {
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDownload(file: AssignmentUploadRead) {
+    setError(null);
+    setBusyId(file.id);
+    try {
+      const blob = await downloadAssignment(sessionId, file.id);
+      triggerBlobDownload(blob, file.original_filename);
+    } catch (downloadError) {
+      setError(
+        downloadError instanceof ApiError
+          ? downloadError.detail
+          : `Could not download ${file.original_filename}.`,
+      );
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
-    <Link href="/student" className="text-sm text-slate-500 underline">
-      Back to all sessions
-    </Link>
+    <div className="lms-card">
+      <h2 className="text-base font-semibold text-neutral-900">Assignment files</h2>
+      <p className="mt-1 mb-4 text-sm text-neutral-500">
+        Download a file, solve any notebooks inside it, then upload your solution below.
+      </p>
+
+      {error ? <FormError>{error}</FormError> : null}
+
+      {uploads.length === 0 ? (
+        <EmptyState>
+          Your instructor hasn&apos;t uploaded any assignment files for this session yet.
+        </EmptyState>
+      ) : (
+        <ul className="divide-y divide-neutral-100">
+          {uploads.map((file) => (
+            <li key={file.id} className="flex items-center justify-between gap-4 py-3">
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium text-neutral-900">
+                  {file.original_filename}
+                </span>
+                <span className="block text-xs text-neutral-400">
+                  Added {formatDate(file.uploaded_at)}
+                </span>
+              </span>
+              <SmallButton
+                onClick={() => void handleDownload(file)}
+                disabled={busyId === file.id}
+              >
+                {busyId === file.id ? "Downloading..." : "Download"}
+              </SmallButton>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
-/**
- * Lists every SubmissionUpload the student has made (additive, so possibly
- * many) with a per-item delete control. Delete enforcement is real and
- * server-side now (a 409 naming the actual score(s) that would be lost when
- * the upload produced a graded file), not just a client-side guardrail —
- * the confirm prompt shown here is the backend's own message, verbatim.
- */
+// ── Submission status panel ───────────────────────────────────────────────────
+
 function SubmissionStatusPanel({
   sessionId,
   submission,
@@ -285,10 +332,7 @@ function SubmissionStatusPanel({
   const [downloadError, setDownloadError] = useState<Record<number, string>>({});
 
   async function handleDownload(upload: SubmissionRead["uploads"][number]) {
-    setDownloadError((cur) => {
-      const { [upload.id]: _removed, ...rest } = cur;
-      return rest;
-    });
+    setDownloadError((cur) => { const { [upload.id]: _, ...rest } = cur; return rest; });
     setDownloadBusyId(upload.id);
     try {
       const blob = await downloadMySubmissionUpload(sessionId, upload.id);
@@ -296,8 +340,7 @@ function SubmissionStatusPanel({
     } catch (dlError) {
       setDownloadError((cur) => ({
         ...cur,
-        [upload.id]:
-          dlError instanceof ApiError ? dlError.detail : `Could not download ${upload.original_filename}.`,
+        [upload.id]: dlError instanceof ApiError ? dlError.detail : `Could not download ${upload.original_filename}.`,
       }));
     } finally {
       setDownloadBusyId(null);
@@ -305,17 +348,11 @@ function SubmissionStatusPanel({
   }
 
   async function handleDelete(uploadId: number, confirm: boolean) {
-    setItemError((cur) => {
-      const { [uploadId]: _removed, ...rest } = cur;
-      return rest;
-    });
+    setItemError((cur) => { const { [uploadId]: _, ...rest } = cur; return rest; });
     setBusyId(uploadId);
     try {
       await deleteSubmissionUpload(sessionId, uploadId, { confirm });
-      setConfirmText((cur) => {
-        const { [uploadId]: _removed, ...rest } = cur;
-        return rest;
-      });
+      setConfirmText((cur) => { const { [uploadId]: _, ...rest } = cur; return rest; });
       await onDeleted();
     } catch (deleteError) {
       if (deleteError instanceof ApiError && deleteError.status === 409) {
@@ -323,10 +360,7 @@ function SubmissionStatusPanel({
       } else {
         setItemError((cur) => ({
           ...cur,
-          [uploadId]:
-            deleteError instanceof ApiError
-              ? deleteError.detail
-              : "Could not remove this upload.",
+          [uploadId]: deleteError instanceof ApiError ? deleteError.detail : "Could not remove this upload.",
         }));
       }
     } finally {
@@ -335,19 +369,20 @@ function SubmissionStatusPanel({
   }
 
   return (
-    <Panel title="Your submission">
+    <div className="lms-card">
+      <h2 className="text-base font-semibold text-neutral-900">Your submission</h2>
+
       {error ? <FormError>{error}</FormError> : null}
 
       {submission === undefined && !error ? (
-        <Loading>Checking your submission…</Loading>
+        <div className="mt-4"><Loading>Checking your submission...</Loading></div>
       ) : submission === null || submission.uploads.length === 0 ? (
-        // The normal, expected "nothing yet" case — not a failure.
-        <EmptyState>
-          You haven&apos;t submitted anything for this session yet.
-        </EmptyState>
-      ) : submission ? (
-        <div>
-          <p className="text-xs text-slate-500">
+        <div className="mt-4">
+          <EmptyState>You haven&apos;t submitted anything for this session yet.</EmptyState>
+        </div>
+      ) : (
+        <div className="mt-4">
+          <p className="text-xs text-neutral-500">
             {submission.uploads.length}{" "}
             {submission.uploads.length === 1 ? "upload" : "uploads"},{" "}
             {submission.files.length}{" "}
@@ -355,7 +390,7 @@ function SubmissionStatusPanel({
             {submission.files.filter((f) => f.graded).length} graded
           </p>
 
-          <ul className="mt-3 divide-y divide-slate-200 border-t border-slate-200">
+          <ul className="mt-3 divide-y divide-neutral-100">
             {submission.uploads.map((upload) => {
               const producedFiles = submission.files.filter(
                 (f) => f.source_upload_id === upload.id,
@@ -364,10 +399,10 @@ function SubmissionStatusPanel({
                 <li key={upload.id} className="py-3">
                   <div className="flex items-center justify-between gap-3">
                     <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium text-slate-900">
+                      <span className="block truncate text-sm font-medium text-neutral-900">
                         {upload.original_filename}
                       </span>
-                      <span className="block text-xs text-slate-500">
+                      <span className="block text-xs text-neutral-400">
                         Uploaded {formatDate(upload.uploaded_at)}
                         {producedFiles.length > 0
                           ? `, ${producedFiles.length} ${producedFiles.length === 1 ? "notebook" : "notebooks"} (${producedFiles.filter((f) => f.graded).length} graded)`
@@ -392,20 +427,20 @@ function SubmissionStatusPanel({
                   </div>
 
                   {downloadError[upload.id] ? (
-                    <p className="mt-2 text-xs text-red-600" role="alert">
+                    <p className="mt-2 text-xs text-danger-600" role="alert">
                       {downloadError[upload.id]}
                     </p>
                   ) : null}
 
                   {itemError[upload.id] ? (
-                    <p className="mt-2 text-xs text-red-600" role="alert">
+                    <p className="mt-2 text-xs text-danger-600" role="alert">
                       {itemError[upload.id]}
                     </p>
                   ) : null}
 
                   {confirmText[upload.id] ? (
-                    <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-3">
-                      <p className="text-sm text-amber-900">{confirmText[upload.id]}</p>
+                    <div className="mt-2 lms-alert lms-alert-warning">
+                      <p className="text-sm">{confirmText[upload.id]}</p>
                       <div className="mt-3 flex items-center gap-2">
                         <SmallButton
                           tone="danger"
@@ -417,7 +452,7 @@ function SubmissionStatusPanel({
                         <SmallButton
                           onClick={() =>
                             setConfirmText((cur) => {
-                              const { [upload.id]: _removed, ...rest } = cur;
+                              const { [upload.id]: _, ...rest } = cur;
                               return rest;
                             })
                           }
@@ -433,74 +468,7 @@ function SubmissionStatusPanel({
             })}
           </ul>
         </div>
-      ) : null}
-    </Panel>
-  );
-}
-
-function AssignmentFilesPanel({
-  sessionId,
-  uploads,
-}: {
-  sessionId: number;
-  uploads: AssignmentUploadRead[];
-}) {
-  const [busyId, setBusyId] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleDownload(file: AssignmentUploadRead) {
-    setError(null);
-    setBusyId(file.id);
-    try {
-      // Requires the bearer token, so a plain <a href> would 401. Returns
-      // the ORIGINAL bytes exactly -- a zip downloads as that zip, never a
-      // browsable list of what's inside it.
-      const blob = await downloadAssignment(sessionId, file.id);
-      triggerBlobDownload(blob, file.original_filename);
-    } catch (downloadError) {
-      setError(
-        downloadError instanceof ApiError
-          ? downloadError.detail
-          : `Could not download ${file.original_filename}.`,
-      );
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  return (
-    <Panel
-      title="Assignment files"
-      description="Download a file, solve any notebooks inside it, then upload your solved copy. A zip downloads exactly as your instructor uploaded it."
-    >
-      {error ? <FormError>{error}</FormError> : null}
-
-      {uploads.length === 0 ? (
-        <EmptyState>
-          Your instructor hasn&apos;t uploaded any assignment files for this session yet.
-        </EmptyState>
-      ) : (
-        <ul className="divide-y divide-slate-200">
-          {uploads.map((file) => (
-            <li key={file.id} className="flex items-center justify-between gap-4 py-3">
-              <span className="min-w-0">
-                <span className="truncate text-sm font-medium text-slate-900">
-                  {file.original_filename}
-                </span>
-                <span className="block text-xs text-slate-500">
-                  Added {formatDate(file.uploaded_at)}
-                </span>
-              </span>
-              <SmallButton
-                onClick={() => handleDownload(file)}
-                disabled={busyId === file.id}
-              >
-                {busyId === file.id ? "Downloading…" : "Download"}
-              </SmallButton>
-            </li>
-          ))}
-        </ul>
       )}
-    </Panel>
+    </div>
   );
 }

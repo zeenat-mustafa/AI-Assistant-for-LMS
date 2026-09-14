@@ -8,7 +8,7 @@ import { StudentDashboard } from "./student-dashboard";
 export default function StudentHomePage() {
   return (
     <RequireAuth role="student">
-      <SignedInShell>
+      <SignedInShell fullWidth>
         <StudentDashboard />
       </SignedInShell>
     </RequireAuth>

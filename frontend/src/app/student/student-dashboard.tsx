@@ -1,28 +1,24 @@
 "use client";
 
 /**
- * Student dashboard: every session in the system, honestly labelled.
+ * Student dashboard — Phase 7.8
  *
- * Scope decision (signed off): show ALL sessions, with a visible note that
- * there is no enrolment concept. GET /sessions lists every session to any
- * authenticated user and the schema has no enrolment table at all, so there
- * is nothing to filter by that would be correct.
+ * Two-column layout via SessionShell. Left sidebar: real session list.
+ * Right pane: intro text and "select a session" prompt.
+ * Session detail lives at /student/sessions/[id].
  *
- * Filtering by "has a submission" was rejected against real data: the seeded
- * demo student has no submissions anywhere, so that filter would render an
- * empty dashboard with no route to any session — hiding sessions at exactly
- * the moment a student needs to find one.
+ * Scope: shows ALL sessions — no enrolment concept in the system.
  */
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { ApiError, listSessions } from "@/lib/api";
 import type { SessionRead } from "@/lib/api";
-import { EmptyState, FormError, Loading, Panel } from "@/components/ui";
-import { formatDate } from "@/lib/format";
+import { FormError } from "@/components/ui";
+import { SessionShell, SessionShellEmpty } from "@/components/session-shell";
+import type { SessionListItem } from "@/components/session-shell";
 
-/** The backend's maximum page size; see the instructor dashboard's note. */
 const PAGE_LIMIT = 200;
 
 export async function loadAllSessions(): Promise<
@@ -39,6 +35,7 @@ export async function loadAllSessions(): Promise<
 }
 
 export function StudentDashboard() {
+  const router = useRouter();
   const [sessions, setSessions] = useState<SessionRead[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -54,73 +51,46 @@ export function StudentDashboard() {
       setSessions(result.sessions);
       setLoadError(null);
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
+  const sessionItems: SessionListItem[] = (sessions ?? []).map((s) => ({
+    id: s.id,
+    title: s.title,
+    created_at: s.created_at,
+    file_count: s.unsolved_files.length,
+  }));
+
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Sessions</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Open a session to download its assignment files.
-        </p>
-      </div>
-
-      <Panel title="All sessions">
-        {loadError ? <FormError>{loadError}</FormError> : null}
-
-        {sessions === null ? (
-          <Loading>Loading sessions…</Loading>
-        ) : sessions.length === 0 ? (
-          <>
-            <EmptyState>No sessions have been created yet.</EmptyState>
-            <EnrolmentCaveat />
-          </>
-        ) : (
-          <>
-            <ul className="divide-y divide-slate-200">
-              {sessions.map((session) => (
-                <li key={session.id}>
-                  <Link
-                    href={`/student/sessions/${session.id}`}
-                    className="flex items-center justify-between gap-4 py-3 transition hover:bg-slate-50"
-                  >
-                    <span>
-                      <span className="block text-sm font-medium text-slate-900">
-                        {session.title}
-                      </span>
-                      <span className="block text-xs text-slate-500">
-                        Created {formatDate(session.created_at)} -{" "}
-                        {session.unsolved_files.length}{" "}
-                        {session.unsolved_files.length === 1 ? "file" : "files"}
-                      </span>
-                    </span>
-                    <span className="text-xs text-indigo-600 font-medium">
-                      View
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-            <EnrolmentCaveat />
-          </>
-        )}
-      </Panel>
-    </div>
-  );
-}
-
-/**
- * States the scope plainly rather than letting the list imply these sessions
- * were assigned to this student.
- */
-function EnrolmentCaveat() {
-  return (
-    <p className="mt-4 border-t border-slate-200 pt-3 text-xs text-slate-500">
-      There is no enrolment in this system yet, so this lists every session —
-      not only the ones assigned to you.
-    </p>
+    <SessionShell
+      sessions={sessionItems}
+      selectedId={null}
+      onSelect={(id) => router.push(`/student/sessions/${id}`)}
+      hrefBase="/student/sessions"
+      listLabel="Sessions"
+      loading={sessions === null}
+      emptyLabel="No sessions have been created yet."
+    >
+      {loadError ? (
+        <div className="p-6">
+          <FormError>{loadError}</FormError>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="lms-card">
+            <h1 className="text-xl font-semibold text-neutral-900">Welcome</h1>
+            <p className="mt-2 text-sm text-neutral-500">
+              Select a session from the left to download assignment files,
+              upload your solution, and view your grades.
+            </p>
+          </div>
+          <p className="text-xs text-neutral-400">
+            There is no enrolment in this system yet — all sessions are shown,
+            not only the ones assigned to you.
+          </p>
+          <SessionShellEmpty label="No session selected" />
+        </div>
+      )}
+    </SessionShell>
   );
 }

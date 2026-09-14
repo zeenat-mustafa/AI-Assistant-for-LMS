@@ -152,7 +152,7 @@ beforeEach(() => {
 describe("<StudentSessionDetail /> — session and assignment files", () => {
   it("shows the session's real fields", async () => {
     render(<StudentSessionDetail sessionId={3} />);
-    expect(screen.getByText(/loading session/i)).toBeInTheDocument();
+    expect(screen.getByText(/loading session details/i)).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Week 2 Day 1" })).toBeInTheDocument();
     expect(getSessionMock).toHaveBeenCalledWith(3);
   });
