@@ -154,7 +154,7 @@ describe("<QuizHistory />", () => {
 
     render(<QuizHistory />);
 
-    expect(await screen.findByText("4/5 (practice quiz — does not affect your real grades)")).toBeInTheDocument();
+    expect(await screen.findByText("4 / 5")).toBeInTheDocument();
 
     expect(screen.getByText("Topic (topic_text: tool calling)")).toBeInTheDocument();
 

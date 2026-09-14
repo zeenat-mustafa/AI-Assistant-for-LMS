@@ -106,21 +106,20 @@ function QuizHistoryRow({ item }: { item: QuizHistoryItem }) {
         onClick={() => void handleToggle()}
         disabled={loading}
         aria-expanded={expanded}
-        className="flex w-full items-center justify-between gap-4 py-3 text-left transition hover:bg-neutral-50 disabled:opacity-50"
+        className="flex w-full items-start justify-between gap-3 py-3 text-left transition hover:bg-neutral-50 disabled:opacity-50"
       >
-        <span className="min-w-0">
-          <span className="block text-sm font-medium text-neutral-900">
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium text-neutral-900">
             {describeScope(item.scope_type, item.scope_detail)}
           </span>
-          <span className="block text-xs text-neutral-500">
-            Submitted {formatDate(item.submitted_at)}
+          <span className="mt-0.5 flex items-center gap-2 text-xs text-neutral-500">
+            <span>{item.score} / {item.max_score}</span>
+            <span>·</span>
+            <span>Submitted {formatDate(item.submitted_at)}</span>
           </span>
         </span>
-        <span className="flex shrink-0 items-center gap-3">
-          <span className="text-sm font-medium text-neutral-700">{item.score_label}</span>
-          <span className="text-xs text-neutral-400">
-            {loading ? "Loading…" : expanded ? "Hide details ▲" : "Show details ▼"}
-          </span>
+        <span className="mt-0.5 shrink-0 text-xs text-neutral-400">
+          {loading ? "Loading…" : expanded ? "▲ Hide" : "▼ Details"}
         </span>
       </button>
 
