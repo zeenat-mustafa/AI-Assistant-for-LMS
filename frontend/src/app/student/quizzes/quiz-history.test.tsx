@@ -158,7 +158,7 @@ describe("<QuizHistory />", () => {
 
     expect(screen.getByText("Topic (topic_text: tool calling)")).toBeInTheDocument();
 
-    expect(screen.getByText(NOTICE)).toBeInTheDocument();
+    expect(screen.getByText(/practice only.*never changes your real grades/i)).toBeInTheDocument();
 
     expect(screen.getByText(/only submitted quizzes appear here/i)).toBeInTheDocument();
 

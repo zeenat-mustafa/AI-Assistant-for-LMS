@@ -9,17 +9,13 @@ import { useEffect, useState } from "react";
 
 import { ApiError, getQuizAttempt, getQuizHistory, isQuizResult } from "@/lib/api";
 import type { QuizHistoryItem, QuizHistoryOut, QuizResultOut } from "@/lib/api";
-import { EmptyState, FormError, Loading } from "@/components/ui";
+import { EmptyState, FormError, Loading, SmallButton } from "@/components/ui";
 import { PRACTICE_ONLY_LINE, QuizResultView, describeScope } from "@/components/quiz-views";
 import { formatDate } from "@/lib/format";
 
 export function QuizHistory() {
   const [history, setHistory] = useState<QuizHistoryOut | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-
-  const [selected, setSelected] = useState<QuizResultOut | null>(null);
-  const [selectedError, setSelectedError] = useState<string | null>(null);
-  const [loadingId, setLoadingId] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,25 +30,6 @@ export function QuizHistory() {
     );
     return () => { cancelled = true; };
   }, []);
-
-  async function open(item: QuizHistoryItem) {
-    setSelectedError(null);
-    setLoadingId(item.attempt_id);
-    try {
-      const attempt = await getQuizAttempt(item.attempt_id);
-      if (isQuizResult(attempt)) {
-        setSelected(attempt);
-      } else {
-        setSelected(null);
-        setSelectedError("This quiz has not been submitted yet.");
-      }
-    } catch (error) {
-      setSelected(null);
-      setSelectedError(error instanceof ApiError ? error.detail : "Could not load this quiz.");
-    } finally {
-      setLoadingId(null);
-    }
-  }
 
   return (
     <div className="space-y-6">
@@ -73,41 +50,94 @@ export function QuizHistory() {
           history.attempts.length === 0 ? (
             <EmptyState>You haven&apos;t submitted any practice quizzes yet.</EmptyState>
           ) : (
-            <>
-              <p className="mb-3 text-xs text-neutral-500">{history.notice}</p>
-              <ul className="divide-y divide-neutral-100">
+            <ul className="divide-y divide-neutral-100">
               {history.attempts.map((item) => (
-                <li key={item.attempt_id}>
-                  <button
-                    type="button"
-                    onClick={() => void open(item)}
-                    disabled={loadingId === item.attempt_id}
-                    className="flex w-full items-center justify-between gap-4 py-3 text-left transition hover:bg-neutral-50 disabled:opacity-50"
-                  >
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium text-neutral-900">
-                        {describeScope(item.scope_type, item.scope_detail)}
-                      </span>
-                      <span className="block text-xs text-neutral-500">
-                        Submitted {formatDate(item.submitted_at)}
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-sm font-medium text-neutral-700">
-                      {item.score_label}
-                    </span>
-                  </button>
-                </li>
+                <QuizHistoryRow key={item.attempt_id} item={item} />
               ))}
             </ul>
-            </>
           )
         ) : !loadError ? (
           <Loading>Loading quiz history...</Loading>
         ) : null}
       </div>
-
-      {selectedError ? <FormError>{selectedError}</FormError> : null}
-      {selected ? <QuizResultView result={selected} /> : null}
     </div>
+  );
+}
+
+// ── Per-row component with inline expand ──────────────────────────────────────
+
+function QuizHistoryRow({ item }: { item: QuizHistoryItem }) {
+  const [expanded, setExpanded] = useState(false);
+  const [result, setResult] = useState<QuizResultOut | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function handleToggle() {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    // Already loaded — just expand
+    if (result) {
+      setExpanded(true);
+      return;
+    }
+    setError(null);
+    setLoading(true);
+    try {
+      const attempt = await getQuizAttempt(item.attempt_id);
+      if (isQuizResult(attempt)) {
+        setResult(attempt);
+        setExpanded(true);
+      } else {
+        setError("This quiz has not been submitted yet.");
+      }
+    } catch (fetchError) {
+      setError(fetchError instanceof ApiError ? fetchError.detail : "Could not load this quiz.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => void handleToggle()}
+        disabled={loading}
+        aria-expanded={expanded}
+        className="flex w-full items-center justify-between gap-4 py-3 text-left transition hover:bg-neutral-50 disabled:opacity-50"
+      >
+        <span className="min-w-0">
+          <span className="block text-sm font-medium text-neutral-900">
+            {describeScope(item.scope_type, item.scope_detail)}
+          </span>
+          <span className="block text-xs text-neutral-500">
+            Submitted {formatDate(item.submitted_at)}
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-3">
+          <span className="text-sm font-medium text-neutral-700">{item.score_label}</span>
+          <span className="text-xs text-neutral-400">
+            {loading ? "Loading…" : expanded ? "Hide details ▲" : "Show details ▼"}
+          </span>
+        </span>
+      </button>
+
+      {error ? (
+        <div className="pb-3">
+          <FormError>{error}</FormError>
+        </div>
+      ) : null}
+
+      {expanded && result ? (
+        <div className="pb-4">
+          <QuizResultView result={result} />
+          <div className="mt-2 flex justify-end">
+            <SmallButton onClick={() => setExpanded(false)}>Hide details</SmallButton>
+          </div>
+        </div>
+      ) : null}
+    </li>
   );
 }
