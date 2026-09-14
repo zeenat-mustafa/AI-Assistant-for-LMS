@@ -327,3 +327,117 @@ class TestGenerationFailure:
 
         assert [e["event"] for e in events] == ["resolved", "citations", "token", "error"]
         assert db.query(ConversationMessage).count() == 0
+
+
+# ===========================================================================
+# Fix 1 — greeting / conversational bypass
+# ===========================================================================
+
+class TestConversationalBypass:
+    """Greetings and small talk skip session resolution entirely (bypass fires
+    inside resolve_session before any Chroma call, so we test via the real
+    resolver rather than the monkeypatched fake in `fakes`)."""
+
+    def test_greeting_returns_friendly_reply_with_no_retrieve_call(
+        self, client, student_headers, monkeypatch, db
+    ):
+        """'hi' must produce token+done with no retrieve call and no thread."""
+        retrieve_calls = []
+
+        def fake_retrieve(query, session_id=None, top_k=5, min_similarity=0.35):
+            retrieve_calls.append(query)
+            return []
+
+        monkeypatch.setattr(student_chat, "retrieve", fake_retrieve)
+        # Let the REAL resolve_session run (don't replace it with fakes fixture).
+        events = _events(
+            client.post(URL, json={"question": "hi"}, headers=student_headers)
+        )
+        assert [e["event"] for e in events] == ["token", "done"]
+        assert "ask" in events[0]["text"].lower() or "hi" in events[0]["text"].lower()
+        assert retrieve_calls == []
+        assert db.query(ConversationThread).count() == 0
+
+    def test_greeting_produces_no_citations(self, client, student_headers, monkeypatch, db):
+        monkeypatch.setattr(student_chat, "retrieve", lambda *a, **kw: [])
+        events = _events(
+            client.post(URL, json={"question": "thanks"}, headers=student_headers)
+        )
+        assert not any(e["event"] == "citations" for e in events)
+
+    @pytest.mark.parametrize("greeting", ["hi", "hello", "hey", "thanks", "ok", "bye"])
+    def test_common_greetings_all_bypass(self, client, student_headers, monkeypatch, greeting):
+        retrieve_calls = []
+        monkeypatch.setattr(student_chat, "retrieve", lambda *a, **kw: retrieve_calls.append(a) or [])
+        events = _events(
+            client.post(URL, json={"question": greeting}, headers=student_headers)
+        )
+        assert [e["event"] for e in events] == ["token", "done"]
+        assert retrieve_calls == []
+
+
+# ===========================================================================
+# Fix 2 — broad multi-session topic path
+# ===========================================================================
+
+class TestBroadTopicPath:
+    """General topic questions resolve with session_id=None and get a cross-session answer."""
+
+    def test_broad_topic_resolution_triggers_cross_session_retrieval(
+        self, client, student_headers, fakes, db
+    ):
+        # Simulate resolver returning broad_search with session_id=None (Fix 2).
+        fakes["resolution"] = ResolutionResult(
+            status="resolved", session_id=None, session_title=None, resolution="broad_search",
+        )
+        events = _events(
+            client.post(URL, json={"question": "what is evaluation of AI?"}, headers=student_headers)
+        )
+        assert [e["event"] for e in events] == ["resolved", "citations", "token", "token", "token", "done"]
+        assert events[0]["session_id"] is None
+        # retrieve() was called with session_id=None — cross-session.
+        assert fakes["retrieve_calls"][0][1] is None
+
+    def test_broad_topic_with_no_material_suppresses_citations(
+        self, client, student_headers, fakes, db
+    ):
+        fakes["resolution"] = ResolutionResult(
+            status="resolved", session_id=None, session_title=None, resolution="broad_search",
+        )
+        fakes["retrieved"] = []  # Nothing above threshold.
+        events = _events(
+            client.post(URL, json={"question": "what is evaluation of AI?"}, headers=student_headers)
+        )
+        # No citations event when nothing was retrieved.
+        assert not any(e["event"] == "citations" for e in events)
+        assert any(e["event"] == "token" for e in events)
+
+    def test_broad_topic_no_thread_created(self, client, student_headers, fakes, db):
+        """session_id=None → no ConversationThread (can't key memory without a session)."""
+        fakes["resolution"] = ResolutionResult(
+            status="resolved", session_id=None, session_title=None, resolution="broad_search",
+        )
+        _events(client.post(URL, json={"question": "what is evaluation of AI?"}, headers=student_headers))
+        assert db.query(ConversationThread).count() == 0
+
+
+# ===========================================================================
+# Fix 3 — citation suppression on no-material path
+# ===========================================================================
+
+class TestCitationSuppression:
+    """Citations are only emitted when real material was retrieved."""
+
+    def test_no_citations_when_retrieved_is_empty(self, client, student_headers, fakes, db):
+        fakes["retrieved"] = []
+        events = _events(client.post(URL, json={"question": "q"}, headers=student_headers))
+        assert not any(e["event"] == "citations" for e in events)
+        # Short-circuit canned message is sent instead.
+        token_texts = [e["text"] for e in events if e["event"] == "token"]
+        assert len(token_texts) == 1
+        assert "couldn't find" in token_texts[0]
+
+    def test_citations_present_when_material_retrieved(self, client, student_headers, fakes, db):
+        # Default fakes has two chunks — citations must still appear.
+        events = _events(client.post(URL, json={"question": "q"}, headers=student_headers))
+        assert any(e["event"] == "citations" for e in events)

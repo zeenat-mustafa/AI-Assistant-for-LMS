@@ -77,6 +77,45 @@ def has_vague_session_reference(question: str) -> bool:
     return bool(_VAGUE_SESSION_REFERENCE.search(question or ""))
 
 
+# ── Greeting / small-talk bypass ──────────────────────────────────────────────
+# Common conversational words that signal a greeting or social phrase.
+# Intentionally conservative — only words that are unambiguously non-course
+# content, so a short question like "what is a pandas dataframe" is never
+# accidentally caught (it contains "pandas", not in the set).
+_CONVERSATIONAL_WORDS = {
+    "hi", "hey", "hello", "hiya", "howdy",
+    "thanks", "thank", "you", "thx", "ty",
+    "ok", "okay", "k", "alright", "sure",
+    "great", "cool", "nice", "awesome", "good",
+    "yes", "no", "yep", "nope", "yeah", "nah",
+    "bye", "goodbye", "cya", "later",
+    "got", "it", "gotcha",
+    "lol", "haha", "hehe",
+}
+
+
+def is_conversational(question: str) -> bool:
+    """
+    Return True when *question* is a short greeting or social phrase with no
+    course-content signal.
+
+    Rule: strip punctuation, split on whitespace; if 4 words or fewer AND
+    every word (lowercased) is in the conversational vocabulary, treat it as
+    conversational and skip session resolution entirely.
+    """
+    cleaned = re.sub(r"[!?.,'\"]+", "", (question or "").strip().lower())
+    words = cleaned.split()
+    if not words:
+        return False
+    return len(words) <= 4 and all(w in _CONVERSATIONAL_WORDS for w in words)
+
+
+# Threshold for a general/multi-session topic that doesn't need a specific
+# session — matches the answer-retrieval threshold so the answer step will
+# always find at least something when this path is taken.
+BROAD_TOPIC_MIN_SIMILARITY = 0.35
+
+
 @dataclass
 class ResolutionResult:
     status: str  # "resolved" | "clarification_needed"
@@ -131,7 +170,20 @@ def resolve_session(
     The caller must have already confirmed current_session_id exists. Never
     raises: any unexpected failure stays in the current session when one was
     given, or asks for clarification otherwise — never a fabricated match.
+
+    Resolution paths
+    ────────────────
+    1. Greeting/small-talk  → status="conversational" (no Chroma call at all)
+    2. current_session_id   → stay in current, or redirect when clearly better
+    3. Specific question, clear winner >= 0.55  → broad_search (one session)
+    4. General topic, top >= 0.35, no clear winner → broad_search, session_id=None
+       (answer retrieval runs across all sessions)
+    5. Vague reference / multi-session tie / nothing above 0.35 → clarification_needed
     """
+    # ── Fix 1: bypass session resolution for greetings / small talk ──────────
+    if is_conversational(question):
+        return ResolutionResult(status="conversational")
+
     try:
         broad = retrieve(question, session_id=None, top_k=BROAD_TOP_K)
         stats = _session_stats(broad)
@@ -174,6 +226,18 @@ def resolve_session(
         )
         if top["best"] >= BROAD_MIN_SIMILARITY and clear_winner:
             return _resolved(top_sid, titles[top_sid], "broad_search")
+
+        # ── Fix 2: general / multi-session topic ──────────────────────────────
+        # The question has real course content (top >= BROAD_TOPIC_MIN_SIMILARITY)
+        # but spans multiple sessions with no clear winner.  Resolve with
+        # session_id=None so the answer step retrieves across all sessions.
+        if top["best"] >= BROAD_TOPIC_MIN_SIMILARITY:
+            return ResolutionResult(
+                status="resolved",
+                session_id=None,
+                session_title=None,
+                resolution="broad_search",
+            )
 
         return ResolutionResult(status="clarification_needed", candidates=candidates)
     except Exception as exc:  # noqa: BLE001 — never raises, see docstring

@@ -140,6 +140,17 @@ def student_chat_stream(
     def event_stream():
         resolution = resolve_session(db, student.id, body.question, body.current_session_id)
 
+        # ── Fix 1: greeting / small-talk — skip everything, reply directly ──
+        if resolution.status == "conversational":
+            friendly = (
+                "Hi! Ask me anything about your course material — "
+                "lectures, assignments, or concepts you'd like explained."
+            )
+            yield _sse({"event": "token", "text": friendly})
+            yield _sse({"event": "done", "thread_id": None,
+                        "user_message_id": None, "assistant_message_id": None})
+            return
+
         if resolution.status != "resolved":
             yield _sse({
                 "event": "clarification_needed",
@@ -155,18 +166,26 @@ def student_chat_stream(
             "resolution": resolution.resolution,
         })
 
-        thread = get_or_create_thread(db, student.id, resolution.session_id)
-        context = get_context_for_prompt(db, thread)
+        thread = get_or_create_thread(db, student.id, resolution.session_id) if resolution.session_id is not None else None
+        context = get_context_for_prompt(db, thread) if thread is not None else None
+        # Fix 2: session_id=None here triggers cross-session retrieval for
+        # general/multi-session topics (resolution.session_id is None when
+        # broad_search resolved without a clear single winner).
         retrieved = retrieve(
             body.question, session_id=resolution.session_id,
             top_k=ANSWER_TOP_K, min_similarity=ANSWER_MIN_SIMILARITY,
         )
-        yield _sse({"event": "citations", "citations": _build_citations(db, retrieved)})
 
-        # ── Short-circuit: nothing retrieved above the similarity threshold ─
+        # Fix 3: only emit citations when real material was retrieved — suppress
+        # on the no-material path (handled below) and implicitly on the
+        # greeting path (which already returned above).
+        if retrieved:
+            yield _sse({"event": "citations", "citations": _build_citations(db, retrieved)})
+
+        # ── Short-circuit: nothing retrieved above the similarity threshold ──
         # Skip the LLM call entirely — there is no course material to reason
         # about, and a full generation would just produce a slower version of
-        # this same message.  The exchange is still persisted so follow-up
+        # this same message. The exchange is still persisted so follow-up
         # questions ("can you try a different way?") have memory context.
         if not retrieved:
             no_material_answer = (
@@ -174,14 +193,18 @@ def student_chat_stream(
                 "Try rephrasing, or ask about a specific topic from your lectures or assignments."
             )
             yield _sse({"event": "token", "text": no_material_answer})
-            user_message = add_message(db, thread, MessageRole.user, body.question)
-            assistant_message = add_message(db, thread, MessageRole.assistant, no_material_answer)
-            yield _sse({
-                "event": "done",
-                "thread_id": thread.id,
-                "user_message_id": user_message.id,
-                "assistant_message_id": assistant_message.id,
-            })
+            if thread is not None:
+                user_message = add_message(db, thread, MessageRole.user, body.question)
+                assistant_message = add_message(db, thread, MessageRole.assistant, no_material_answer)
+                yield _sse({
+                    "event": "done",
+                    "thread_id": thread.id,
+                    "user_message_id": user_message.id,
+                    "assistant_message_id": assistant_message.id,
+                })
+            else:
+                yield _sse({"event": "done", "thread_id": None,
+                            "user_message_id": None, "assistant_message_id": None})
             return
 
         prompt = build_scope_safe_prompt(retrieved, body.question, conversation_history=context)
@@ -199,13 +222,17 @@ def student_chat_stream(
             yield _sse({"event": "error", "message": STUDENT_CHAT_UNAVAILABLE_MESSAGE})
             return
 
-        user_message = add_message(db, thread, MessageRole.user, body.question)
-        assistant_message = add_message(db, thread, MessageRole.assistant, "".join(parts))
-        yield _sse({
-            "event": "done",
-            "thread_id": thread.id,
-            "user_message_id": user_message.id,
-            "assistant_message_id": assistant_message.id,
-        })
+        if thread is not None:
+            user_message = add_message(db, thread, MessageRole.user, body.question)
+            assistant_message = add_message(db, thread, MessageRole.assistant, "".join(parts))
+            yield _sse({
+                "event": "done",
+                "thread_id": thread.id,
+                "user_message_id": user_message.id,
+                "assistant_message_id": assistant_message.id,
+            })
+        else:
+            yield _sse({"event": "done", "thread_id": None,
+                        "user_message_id": None, "assistant_message_id": None})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

@@ -169,19 +169,33 @@ class TestAmbiguousAsksForClarification:
         assert result.session_id is None and result.resolution is None
         assert [c["session_id"] for c in result.candidates] == [2]
 
-    def test_close_split_asks_with_ranked_candidates(self, db, monkeypatch):
+    def test_close_split_resolves_as_broad_topic_search(self, db, monkeypatch):
+        """Fix 2: a multi-session topic with no clear winner but scores >= 0.35
+        resolves as broad_search with session_id=None instead of asking."""
         _fake_retrieve(
             monkeypatch,
             broad=[_chunk(1, 0.73)] * 5 + [_chunk(2, 0.68)] * 3 + [_chunk(3, 0.60)] * 2,
         )
         result = resolve_session(db, STUDENT_ID, "q")
-        assert result.status == "clarification_needed"
-        assert [c["session_id"] for c in result.candidates] == [1, 2, 3]
-        assert result.candidates[0] == {"session_id": 1, "session_title": "Week 1 Day 1", "best_similarity": 0.73}
+        assert result.status == "resolved"
+        assert result.session_id is None
+        assert result.resolution == "broad_search"
 
-    def test_candidates_capped(self, db, monkeypatch):
-        _fake_retrieve(monkeypatch, broad=[_chunk(s, 0.50) for s in (1, 2, 3, 4)])
+    def test_close_split_below_topic_threshold_asks_with_ranked_candidates(self, db, monkeypatch):
+        """When no session clears even BROAD_TOPIC_MIN_SIMILARITY (0.35), still ask."""
+        _fake_retrieve(
+            monkeypatch,
+            broad=[_chunk(1, 0.30)] * 5 + [_chunk(2, 0.28)] * 3,
+        )
         result = resolve_session(db, STUDENT_ID, "q")
+        assert result.status == "clarification_needed"
+        assert [c["session_id"] for c in result.candidates] == [1, 2]
+
+    def test_candidates_capped_below_topic_threshold(self, db, monkeypatch):
+        """Candidates are only offered when all scores are below BROAD_TOPIC_MIN_SIMILARITY."""
+        _fake_retrieve(monkeypatch, broad=[_chunk(s, 0.25) for s in (1, 2, 3, 4)])
+        result = resolve_session(db, STUDENT_ID, "q")
+        assert result.status == "clarification_needed"
         assert len(result.candidates) == MAX_CLARIFICATION_CANDIDATES
 
     def test_zero_results_without_context_asks_with_no_candidates(self, db, monkeypatch):
@@ -306,3 +320,112 @@ class TestClarificationMessage:
         assert build_clarification_message([]) == (
             "I couldn't find course material matching that question. Which session is it about?"
         )
+
+
+# ===========================================================================
+# is_conversational helper (Fix 1)
+# ===========================================================================
+
+class TestIsConversational:
+
+    @pytest.mark.parametrize("text", [
+        "hi", "hello", "hey", "Hi!", "Hello.", "HELLO",
+        "thanks", "thank you", "thx", "ty",
+        "ok", "okay", "ok thanks", "yes", "no", "yeah", "nah",
+        "bye", "goodbye",
+        "got it", "gotcha",
+        "cool", "great", "awesome",
+    ])
+    def test_greetings_and_small_talk_are_conversational(self, text):
+        from app.services.chat_session_resolver import is_conversational
+        assert is_conversational(text), f"Expected {text!r} to be conversational"
+
+    @pytest.mark.parametrize("text", [
+        "what is a pandas dataframe",
+        "how does bind_tools work",
+        "explain the ReAct loop",
+        "what should I do for the TODO",
+        "evaluation of AI models",
+        "hi how does the agent work",   # 5 words, has "agent" → not caught
+        "",
+    ])
+    def test_course_questions_are_not_conversational(self, text):
+        from app.services.chat_session_resolver import is_conversational
+        assert not is_conversational(text), f"Expected {text!r} NOT to be conversational"
+
+
+# ===========================================================================
+# Conversational bypass path in resolve_session (Fix 1)
+# ===========================================================================
+
+class TestConversationalBypassInResolver:
+
+    def test_greeting_returns_conversational_status_without_chroma_call(self, db, monkeypatch):
+        """retrieve() must never be called for a greeting — bypass fires first."""
+        retrieve_called = []
+
+        def fake_retrieve(*args, **kwargs):
+            retrieve_called.append(args)
+            return []
+
+        monkeypatch.setattr(resolver, "retrieve", fake_retrieve)
+        result = resolve_session(db, STUDENT_ID, "hi")
+        assert result.status == "conversational"
+        assert result.session_id is None
+        assert retrieve_called == []  # No Chroma call at all.
+
+    def test_greeting_with_current_session_id_still_bypasses(self, db, monkeypatch):
+        retrieve_called = []
+        monkeypatch.setattr(resolver, "retrieve", lambda *a, **kw: retrieve_called.append(a) or [])
+        result = resolve_session(db, STUDENT_ID, "thanks", current_session_id=7)
+        assert result.status == "conversational"
+        assert retrieve_called == []
+
+
+# ===========================================================================
+# Broad multi-session topic path (Fix 2)
+# ===========================================================================
+
+class TestBroadTopicResolution:
+
+    def test_multi_session_topic_resolves_with_no_session_id(self, db, monkeypatch):
+        """Scores 0.73/0.68/0.60 — no clear winner but all above 0.35."""
+        _fake_retrieve(
+            monkeypatch,
+            broad=[_chunk(1, 0.73)] * 5 + [_chunk(2, 0.68)] * 3 + [_chunk(3, 0.60)] * 2,
+        )
+        result = resolve_session(db, STUDENT_ID, "what is evaluation of AI")
+        assert result.status == "resolved"
+        assert result.session_id is None
+        assert result.resolution == "broad_search"
+
+    def test_topic_just_above_threshold_resolves_broadly(self, db, monkeypatch):
+        """Top score 0.36 — just above BROAD_TOPIC_MIN_SIMILARITY (0.35)."""
+        _fake_retrieve(
+            monkeypatch,
+            broad=[_chunk(1, 0.36)] * 2 + [_chunk(2, 0.35)] * 2,
+        )
+        result = resolve_session(db, STUDENT_ID, "some general topic")
+        assert result.status == "resolved"
+        assert result.session_id is None
+
+    def test_topic_below_threshold_still_asks(self, db, monkeypatch):
+        """Top score 0.34 — below BROAD_TOPIC_MIN_SIMILARITY (0.35) → clarification."""
+        _fake_retrieve(
+            monkeypatch,
+            broad=[_chunk(1, 0.34)] * 3 + [_chunk(2, 0.30)] * 2,
+        )
+        result = resolve_session(db, STUDENT_ID, "some obscure question")
+        assert result.status == "clarification_needed"
+
+    def test_high_confidence_clear_winner_still_uses_session_specific_path(self, db, monkeypatch):
+        """Score 0.73 with a clear 0.10+ lead — single-session broad_search, not None."""
+        _fake_retrieve(
+            monkeypatch,
+            broad=[_chunk(1, 0.73)] * 5 + [_chunk(2, 0.60)] * 2,
+        )
+        result = resolve_session(db, STUDENT_ID, "what does bind_tools do")
+        # top=0.73, runner_up=0.60, gap=0.13 >= BROAD_CLEAR_MARGIN(0.10) → clear winner
+        assert result.status == "resolved"
+        assert result.session_id == 1   # specific session, not None
+        assert result.resolution == "broad_search"
