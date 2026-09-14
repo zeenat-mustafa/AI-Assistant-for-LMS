@@ -84,7 +84,7 @@ export function StudentChatWidget() {
   if (status !== "authenticated" || user?.role !== "student") return null;
 
   return (
-    <div className="fixed bottom-6 left-6 z-50">
+    <div className="fixed bottom-6 right-6 z-50">
       {/* Panel — CSS hidden, never unmounted, so conversation persists */}
       <div className={isOpen ? "block" : "hidden"} hidden={!isOpen}>
         <ChatWidgetPanel isOpen={isOpen} onClose={() => setIsOpen(false)} />

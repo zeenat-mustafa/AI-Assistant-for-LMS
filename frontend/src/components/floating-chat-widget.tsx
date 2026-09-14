@@ -89,11 +89,9 @@ export function FloatingChatWidget() {
           type="button"
           onClick={() => setIsOpen(true)}
           aria-label="Open grading chat"
-          className="flex h-14 w-14 items-center justify-center rounded-full bg-slate-900 text-white shadow-lg transition hover:bg-slate-700"
+          className="flex h-14 w-14 items-center justify-center rounded-full bg-primary-600 text-white shadow-lg transition hover:bg-primary-700"
         >
-          <span aria-hidden className="text-2xl">
-            💬
-          </span>
+          <span aria-hidden className="text-xs font-bold tracking-tight">AI</span>
         </button>
       )}
     </div>
@@ -193,11 +191,11 @@ function ChatPanel({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <section className="flex h-[32rem] w-96 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
-      <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+    <section className="flex h-[32rem] w-96 flex-col overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50 shadow-2xl">
+      <header className="flex shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-4 py-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-900">Grading chat</h2>
-          <p className="text-xs text-slate-500">
+          <h2 className="text-sm font-semibold text-neutral-900">Grading chat</h2>
+          <p className="text-xs text-neutral-500">
             Ask me to grade a session, e.g. &ldquo;grade Week 3 Day 1&rdquo;.
           </p>
         </div>
@@ -205,9 +203,9 @@ function ChatPanel({ onClose }: { onClose: () => void }) {
           type="button"
           onClick={onClose}
           aria-label="Close grading chat"
-          className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+          className="ml-2 rounded p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
         >
-          <span aria-hidden className="text-lg leading-none font-bold">
+          <span aria-hidden className="text-base font-bold leading-none">
             x
           </span>
         </button>
@@ -220,16 +218,16 @@ function ChatPanel({ onClose }: { onClose: () => void }) {
         aria-busy={streaming}
       >
         {turns.length === 0 ? (
-          <p className="py-2 text-sm text-slate-500">
-            Try <code className="rounded bg-slate-100 px-1">grade Week 3 Day 1</code> or{" "}
-            <code className="rounded bg-slate-100 px-1">grade Week 3 Day 1 for Fiza</code>.
+          <p className="py-2 text-sm text-neutral-500">
+            Try <code className="rounded bg-neutral-100 px-1 text-neutral-700">grade Week 3 Day 1</code> or{" "}
+            <code className="rounded bg-neutral-100 px-1 text-neutral-700">grade Week 3 Day 1 for Fiza</code>.
           </p>
         ) : (
           turns.map((turn) => <TurnView key={turn.id} turn={turn} />)
         )}
       </div>
 
-      <form onSubmit={handleSubmit} noValidate className="border-t border-slate-200 p-3">
+      <form onSubmit={handleSubmit} noValidate className="shrink-0 border-t border-neutral-200 bg-white p-3">
         <label htmlFor="floating-chat-instruction" className="sr-only">
           Instruction
         </label>
@@ -240,7 +238,7 @@ function ChatPanel({ onClose }: { onClose: () => void }) {
           onChange={(e) => setInstruction(e.target.value)}
           disabled={streaming}
           placeholder="Ask me to grade a session, e.g. 'grade Week 3 Day 1'"
-          className="mb-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-slate-400 disabled:bg-slate-100"
+          className="lms-input mb-2"
         />
         <SubmitButton pending={streaming} pendingLabel="Grading…">
           Send
@@ -253,60 +251,64 @@ function ChatPanel({ onClose }: { onClose: () => void }) {
 function TurnView({ turn }: { turn: Turn }) {
   return (
     <div className="space-y-2">
-      <p className="text-right">
-        <span className="inline-block rounded-lg bg-slate-900 px-3 py-1.5 text-sm text-white">
+      {/* User bubble — right aligned */}
+      <div className="flex justify-end">
+        <span className="max-w-[80%] rounded-2xl rounded-tr-sm bg-primary-600 px-3.5 py-2 text-sm text-white">
           {turn.instruction}
         </span>
-      </p>
+      </div>
 
-      <div className="rounded-lg bg-slate-50 px-3 py-2">
-        {turn.error ? (
-          <p role="alert" className="text-sm text-red-700">
-            {turn.error}
-          </p>
-        ) : null}
-
-        {turn.outcome ? <OutcomeView outcome={turn.outcome} /> : null}
-
-        {turn.events.length > 0 ? (
-          <ul className="space-y-1">
-            {turn.events.map((event, index) => (
-              <li key={index} className="text-xs text-slate-600">
-                <EventLine event={event} />
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        {turn.streaming && !turn.outcome ? (
-          <p className="mt-1 text-xs text-slate-500">Working...</p>
-        ) : null}
-
-        {turn.summary ? (
-          <div className="mt-2 border-t border-slate-200 pt-2">
-            <p className="text-sm text-slate-800">
-              {safeChatText(turn.summary.message, "summary message")}
+      {/* Assistant bubble — left aligned */}
+      <div className="flex justify-start">
+        <div className="max-w-[90%] rounded-2xl rounded-tl-sm border border-neutral-200 bg-white px-3.5 py-2.5 shadow-sm">
+          {turn.error ? (
+            <p role="alert" className="text-sm text-danger-700">
+              {turn.error}
             </p>
-            <p className="mt-1 text-xs text-slate-500">
-              {turn.summary.graded} graded, {turn.summary.failed} failed,{" "}
-              {turn.summary.total} total
-            </p>
-            {turn.summary.failures.length > 0 ? (
-              <ul className="mt-1 list-inside list-disc text-xs text-red-700">
-                {turn.summary.failures.map((failure, index) => (
-                  <li key={index}>
-                    {failure.filename}:{" "}
-                    {safeChatText(
-                      failure.error,
-                      `summary failure for ${failure.filename}`,
-                      GENERIC_FAILURE_FALLBACK,
-                    )}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        ) : null}
+          ) : null}
+
+          {turn.outcome ? <OutcomeView outcome={turn.outcome} /> : null}
+
+          {turn.events.length > 0 ? (
+            <ul className="space-y-1">
+              {turn.events.map((event, index) => (
+                <li key={index} className="text-xs text-neutral-600">
+                  <EventLine event={event} />
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          {turn.streaming && !turn.outcome ? (
+            <p className="mt-1 text-xs italic text-neutral-400">Working...</p>
+          ) : null}
+
+          {turn.summary ? (
+            <div className="mt-2 border-t border-neutral-200 pt-2">
+              <p className="text-sm text-neutral-800">
+                {safeChatText(turn.summary.message, "summary message")}
+              </p>
+              <p className="mt-1 text-xs text-neutral-500">
+                {turn.summary.graded} graded, {turn.summary.failed} failed,{" "}
+                {turn.summary.total} total
+              </p>
+              {turn.summary.failures.length > 0 ? (
+                <ul className="mt-1 list-inside list-disc text-xs text-danger-700">
+                  {turn.summary.failures.map((failure, index) => (
+                    <li key={index}>
+                      {failure.filename}:{" "}
+                      {safeChatText(
+                        failure.error,
+                        `summary failure for ${failure.filename}`,
+                        GENERIC_FAILURE_FALLBACK,
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -353,16 +355,16 @@ function EventLine({ event }: { event: GradingEvent }) {
 function OutcomeView({ outcome }: { outcome: ChatEarlyExit }) {
   return (
     <>
-      <p className="text-sm text-slate-800">
+      <p className="text-sm text-neutral-800">
         {safeChatText(outcome.message, `${outcome.status} message`)}
       </p>
 
       {outcome.status === "ambiguous_session" ? (
-        <ul className="mt-1 list-inside list-disc text-xs text-slate-600">
+        <ul className="mt-1 list-inside list-disc text-xs text-neutral-600">
           {outcome.candidates.map((candidate) => (
             <li key={candidate.session_id}>
               {candidate.session_title}{" "}
-              <span className="text-slate-400">
+              <span className="text-neutral-400">
                 ({Math.round(candidate.confidence * 100)}% match)
               </span>
             </li>
@@ -371,7 +373,7 @@ function OutcomeView({ outcome }: { outcome: ChatEarlyExit }) {
       ) : null}
 
       {outcome.status === "ambiguous_student" ? (
-        <ul className="mt-1 list-inside list-disc text-xs text-slate-600">
+        <ul className="mt-1 list-inside list-disc text-xs text-neutral-600">
           {outcome.candidates.map((candidate) => (
             <li key={candidate.student_id}>{candidate.student_name}</li>
           ))}
