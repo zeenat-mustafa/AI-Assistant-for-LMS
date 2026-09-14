@@ -128,6 +128,7 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
   const nextId = useRef(1);
   const abortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  const lastEntryRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -140,9 +141,16 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
     return () => abortRef.current?.abort();
   }, []);
 
+  // Scroll the TOP of the newest entry into view when a new entry is added.
+  // We track the entry count so we only scroll on additions, not on streaming
+  // token patches (which update entries too but shouldn't move the viewport).
+  const prevEntryCount = useRef(0);
   useEffect(() => {
-    const log = logRef.current;
-    if (log) log.scrollTop = log.scrollHeight;
+    const newCount = entries.length;
+    if (newCount > prevEntryCount.current && lastEntryRef.current) {
+      lastEntryRef.current.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    }
+    prevEntryCount.current = newCount;
   }, [entries]);
 
   const patch = useCallback((id: number, change: Partial<ChatEntry>) => {
@@ -238,11 +246,7 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
       <header className="flex shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold text-neutral-900">Course assistant</h2>
-          <p className="text-xs text-neutral-500">
-            {urlSessionId !== null
-              ? `Ask about lectures or assignments. Scoped to session #${urlSessionId} by default.`
-              : "Ask about lectures or assignments."}
-          </p>
+          <p className="text-xs text-neutral-500">Ask about lectures or assignments.</p>
         </div>
         <button
           type="button"
@@ -294,34 +298,37 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
                 Currently scoped to <strong className="text-neutral-700">{scopeLabel}</strong>.
               </p>
             ) : (
-              entries.map((entry) =>
-                entry.kind === "quiz" ? (
-                  <QuizCard
-                    key={entry.id}
-                    attempt={entry.attempt}
-                    resultFooter={
-                      <>
-                        This result is visible in this chat session.{" "}
-                        <button
-                          type="button"
-                          onClick={() => setTab("history")}
-                          className="underline"
-                        >
-                          Quiz history
-                        </button>{" "}
-                        keeps the permanent record.
-                      </>
-                    }
-                  />
-                ) : (
-                  <ChatTurnView
-                    key={entry.id}
-                    entry={entry}
-                    disabled={streaming}
-                    onChooseCandidate={(candidateId) => void send(entry.question, candidateId)}
-                  />
-                ),
-              )
+              entries.map((entry, index) => {
+                const isLast = index === entries.length - 1;
+                return (
+                  <div key={entry.id} ref={isLast ? lastEntryRef : undefined}>
+                    {entry.kind === "quiz" ? (
+                      <QuizCard
+                        attempt={entry.attempt}
+                        resultFooter={
+                          <>
+                            This result is visible in this chat session.{" "}
+                            <button
+                              type="button"
+                              onClick={() => setTab("history")}
+                              className="underline"
+                            >
+                              Quiz history
+                            </button>{" "}
+                            keeps the permanent record.
+                          </>
+                        }
+                      />
+                    ) : (
+                      <ChatTurnView
+                        entry={entry}
+                        disabled={streaming}
+                        onChooseCandidate={(candidateId) => void send(entry.question, candidateId)}
+                      />
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
 

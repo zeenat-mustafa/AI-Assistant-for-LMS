@@ -202,20 +202,6 @@ export function QuizResultView({
         </p>
       </div>
 
-      {/* Score block */}
-      <div className="px-4 pt-4 pb-3 border-b border-neutral-100">
-        <p
-          className="text-2xl font-bold text-neutral-900"
-          data-testid="quiz-score"
-        >
-          {result.score} / {result.max_score}
-        </p>
-        <p className="mt-0.5 text-sm text-neutral-600">{result.score_label}</p>
-        <div className="mt-3">
-          <PracticeLabel notice={result.notice} />
-        </div>
-      </div>
-
       {/* Per-question breakdown */}
       <ol className="divide-y divide-neutral-100">
         {result.questions.map((question, qi) => {
@@ -270,6 +256,20 @@ export function QuizResultView({
           );
         })}
       </ol>
+
+      {/* Score block — shown after questions so students see answers first */}
+      <div className="px-4 pt-4 pb-3 border-t border-neutral-100">
+        <p
+          className="text-2xl font-bold text-neutral-900"
+          data-testid="quiz-score"
+        >
+          {result.score} / {result.max_score}
+        </p>
+        <p className="mt-0.5 text-sm text-neutral-600">{result.score_label}</p>
+        <div className="mt-3">
+          <PracticeLabel notice={result.notice} />
+        </div>
+      </div>
 
       {footer ? (
         <div className="border-t border-neutral-100 px-4 py-3 text-xs text-neutral-400">

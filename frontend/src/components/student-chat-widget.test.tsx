@@ -129,7 +129,11 @@ describe("<StudentChatWidget /> — session detection & tabs", () => {
     render(<StudentChatWidget />);
     await user.click(screen.getByRole("button", { name: /open course assistant/i }));
 
-    expect(screen.getByText(/scoped to session #5 by default/i)).toBeInTheDocument();
+    // Subtitle no longer mentions the session id — the scoped session is shown
+    // inline in the transcript area instead.
+    expect(screen.getByText(/ask about lectures or assignments/i)).toBeInTheDocument();
+    // The session id is still used for scoping — confirmed by the empty-state prompt.
+    expect(screen.getByText(/session #5/i)).toBeInTheDocument();
   });
 
   it("switches to quiz history tab", async () => {
