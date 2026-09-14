@@ -110,7 +110,7 @@ export function QuizCard({
       </div>
 
       <div className="px-4 pt-3 pb-1">
-        <PracticeLabel notice={attempt.notice} />
+        <PracticeLabel />
       </div>
 
       <form onSubmit={handleSubmit} noValidate className="divide-y divide-neutral-100">
