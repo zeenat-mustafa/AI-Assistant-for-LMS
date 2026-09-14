@@ -163,6 +163,27 @@ def student_chat_stream(
         )
         yield _sse({"event": "citations", "citations": _build_citations(db, retrieved)})
 
+        # ── Short-circuit: nothing retrieved above the similarity threshold ─
+        # Skip the LLM call entirely — there is no course material to reason
+        # about, and a full generation would just produce a slower version of
+        # this same message.  The exchange is still persisted so follow-up
+        # questions ("can you try a different way?") have memory context.
+        if not retrieved:
+            no_material_answer = (
+                "I couldn't find anything about that in your course material. "
+                "Try rephrasing, or ask about a specific topic from your lectures or assignments."
+            )
+            yield _sse({"event": "token", "text": no_material_answer})
+            user_message = add_message(db, thread, MessageRole.user, body.question)
+            assistant_message = add_message(db, thread, MessageRole.assistant, no_material_answer)
+            yield _sse({
+                "event": "done",
+                "thread_id": thread.id,
+                "user_message_id": user_message.id,
+                "assistant_message_id": assistant_message.id,
+            })
+            return
+
         prompt = build_scope_safe_prompt(retrieved, body.question, conversation_history=context)
 
         parts: list[str] = []
