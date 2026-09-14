@@ -148,8 +148,21 @@ function LectureUploadForm({
         name="file"
         accept=".pptx"
         onChange={handleSelect}
-        className="mb-4 block w-full text-sm text-neutral-700 file:mr-3 file:rounded file:border file:border-neutral-300 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-neutral-700"
+        className="sr-only"
       />
+      <div className="mb-4 flex items-center gap-3">
+        <label
+          htmlFor="lecture-file"
+          className="lms-btn-secondary cursor-pointer text-sm"
+        >
+          Choose file
+        </label>
+        {selected ? (
+          <span className="truncate text-sm text-neutral-600">{selected.name}</span>
+        ) : (
+          <span className="text-sm text-neutral-400">No file chosen</span>
+        )}
+      </div>
 
       <SubmitButton pending={pending} pendingLabel="Uploading...">
         Upload lecture

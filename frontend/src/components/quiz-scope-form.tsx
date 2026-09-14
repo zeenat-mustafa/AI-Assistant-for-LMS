@@ -240,15 +240,28 @@ export function QuizScopeForm({
             <label htmlFor="quiz-upload" className="mb-1 block text-xs font-medium text-slate-700">
               File (.pptx or .ipynb)
             </label>
-            <input
-              id="quiz-upload"
-              ref={uploadRef}
-              type="file"
-              accept=".pptx,.ipynb"
-              disabled={pending}
-              onChange={(e) => setUpload(e.target.files?.[0] ?? null)}
-              className="block w-full text-sm text-slate-700"
-            />
+            <div className="flex items-center gap-2">
+              <input
+                id="quiz-upload"
+                ref={uploadRef}
+                type="file"
+                accept=".pptx,.ipynb"
+                disabled={pending}
+                onChange={(e) => setUpload(e.target.files?.[0] ?? null)}
+                className="sr-only"
+              />
+              <label
+                htmlFor="quiz-upload"
+                className={`lms-btn-secondary cursor-pointer text-sm${pending ? " opacity-50 cursor-not-allowed pointer-events-none" : ""}`}
+              >
+                Choose file
+              </label>
+              {upload ? (
+                <span className="truncate text-sm text-slate-600">{upload.name}</span>
+              ) : (
+                <span className="text-sm text-slate-400">No file chosen</span>
+              )}
+            </div>
             <p className="mt-1 text-xs text-slate-500">
               This file is used for this quiz only. It is not saved as a submission, an assignment
               file, or a lecture file.

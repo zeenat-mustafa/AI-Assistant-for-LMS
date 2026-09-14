@@ -644,14 +644,27 @@ function WidgetQuizScopeForm({
           <label htmlFor="widget-quiz-upload" className="mb-1 block text-xs font-medium text-neutral-700">
             File (.pptx or .ipynb)
           </label>
-          <input
-            id="widget-quiz-upload"
-            type="file"
-            accept=".pptx,.ipynb"
-            disabled={pending}
-            onChange={(e) => setUpload(e.target.files?.[0] ?? null)}
-            className="block w-full text-sm text-neutral-700"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              id="widget-quiz-upload"
+              type="file"
+              accept=".pptx,.ipynb"
+              disabled={pending}
+              onChange={(e) => setUpload(e.target.files?.[0] ?? null)}
+              className="sr-only"
+            />
+            <label
+              htmlFor="widget-quiz-upload"
+              className={`lms-btn-secondary cursor-pointer text-xs py-1.5 px-3 ${pending ? "opacity-50 cursor-not-allowed pointer-events-none" : ""}`}
+            >
+              Choose file
+            </label>
+            {upload ? (
+              <span className="truncate text-xs text-neutral-600">{upload.name}</span>
+            ) : (
+              <span className="text-xs text-neutral-400">No file chosen</span>
+            )}
+          </div>
           <p className="mt-1 text-xs text-neutral-400">
             Used for this quiz only — not saved anywhere.
           </p>
