@@ -462,7 +462,7 @@ describe("<StudentChatWidget /> — practice quiz", () => {
     await waitFor(() => {
       expect(submitQuizMock).toHaveBeenCalledWith(101, [1]);
       expect(screen.getByText("5/5 (practice quiz)")).toBeInTheDocument();
-      expect(screen.getByText("Practice quiz — does not affect your real grade.")).toBeInTheDocument();
+      expect(screen.getByText("Practice only — this quiz never changes your real grades.")).toBeInTheDocument();
     });
   });
 

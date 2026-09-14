@@ -267,7 +267,7 @@ export function QuizResultView({
         </p>
         <p className="mt-0.5 text-sm text-neutral-600">{result.score_label}</p>
         <div className="mt-3">
-          <PracticeLabel notice={result.notice} />
+          <PracticeLabel />
         </div>
       </div>
 
