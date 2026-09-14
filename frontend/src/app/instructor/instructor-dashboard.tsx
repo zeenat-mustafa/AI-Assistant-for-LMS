@@ -255,11 +255,6 @@ export function InstructorDashboard() {
           }}
         />
 
-        <div className="lms-card">
-          <p className="text-sm text-neutral-500">
-            Select a session from the left to view its files, submissions, and grades.
-          </p>
-        </div>
       </div>
     </SessionShell>
   );
@@ -296,9 +291,6 @@ function CreateSessionForm({ onCreated }: { onCreated: (s: SessionRead) => void 
   return (
     <div className="lms-card">
       <h2 className="text-base font-semibold text-neutral-900">Create a session</h2>
-      <p className="mt-1 mb-4 text-sm text-neutral-500">
-        Use the naming your class already uses, e.g. "Week 3 Day 1".
-      </p>
       {createError ? <FormError>{createError}</FormError> : null}
       <form onSubmit={handleCreate} noValidate>
         <Field

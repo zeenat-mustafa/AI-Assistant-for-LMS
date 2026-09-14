@@ -34,7 +34,6 @@ export function GradesRoster({
   return (
     <div className="lms-card">
       <h2 className="text-base font-semibold text-neutral-900">Submissions &amp; grades</h2>
-      <p className="mt-1 mb-4 text-sm text-neutral-500">One row per student who has submitted.</p>
 
       {error ? <FormError>{error}</FormError> : null}
 

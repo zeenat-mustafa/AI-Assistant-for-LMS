@@ -316,9 +316,6 @@ function UploadPanel({
   return (
     <div className="lms-card">
       <h2 className="text-base font-semibold text-neutral-900">Upload assignment files</h2>
-      <p className="mt-1 mb-4 text-sm text-neutral-500">
-        Any file type, single or inside a .zip. What you upload is exactly what students see.
-      </p>
 
       {error ? <FormError>{error}</FormError> : null}
       {notice ? <FormNotice>{notice}</FormNotice> : null}

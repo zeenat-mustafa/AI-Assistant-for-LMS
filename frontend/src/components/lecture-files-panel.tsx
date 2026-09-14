@@ -69,11 +69,6 @@ export function LectureFilesPanel({
   return (
     <div className="lms-card">
       <h2 className="text-base font-semibold text-neutral-900">Lecture files</h2>
-      <p className="mt-1 mb-4 text-sm text-neutral-500">
-        {canUpload
-          ? "Upload .pptx lecture slides. Slide text and speaker notes become searchable by the student assistant."
-          : "Lecture slides uploaded for this session."}
-      </p>
 
       {canUpload ? (
         <LectureUploadForm
