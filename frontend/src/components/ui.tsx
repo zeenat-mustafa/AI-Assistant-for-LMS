@@ -1,12 +1,14 @@
 /**
- * Minimal shared form/layout primitives.
+ * Shared UI primitives — Phase 7.8 design system.
  *
- * Deliberately a handful of small components rather than a component
- * library: the UI is explicitly "thin, not the focus" for this project, and
- * these are only what the auth pages (and 5.3-5.6's forms) actually need.
+ * All visual tokens come from globals.css via .lms-* component classes
+ * and Tailwind utilities mapped to CSS custom properties.
+ * Component APIs (props) are unchanged from 7.7.
  */
 
 import type { ReactNode } from "react";
+
+// ── Auth / page-level shell ───────────────────────────────────────────────────
 
 export function AuthCard({ title, subtitle, children }: {
   title: string;
@@ -14,15 +16,17 @@ export function AuthCard({ title, subtitle, children }: {
   children: ReactNode;
 }) {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
-      <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h1 className="text-xl font-semibold text-slate-900">{title}</h1>
-        {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
+    <main className="flex min-h-screen items-center justify-center bg-page-bg p-6">
+      <div className="lms-card w-full max-w-sm">
+        <h1 className="text-xl font-semibold text-neutral-900">{title}</h1>
+        {subtitle ? <p className="mt-1 text-sm text-neutral-500">{subtitle}</p> : null}
         <div className="mt-6">{children}</div>
       </div>
     </main>
   );
 }
+
+// ── Form primitives ───────────────────────────────────────────────────────────
 
 export function Field({ label, error, ...props }: {
   label: string;
@@ -33,20 +37,18 @@ export function Field({ label, error, ...props }: {
   const errorId = `${inputId}-error`;
   return (
     <div className="mb-4">
-      <label htmlFor={inputId} className="mb-1 block text-sm font-medium text-slate-700">
+      <label htmlFor={inputId} className="mb-1 block text-sm font-medium text-neutral-700">
         {label}
       </label>
       <input
         id={inputId}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
-        className={`w-full rounded-md border px-3 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-slate-400 ${
-          error ? "border-red-400" : "border-slate-300"
-        }`}
+        className="lms-input"
         {...rest}
       />
       {error ? (
-        <p id={errorId} className="mt-1 text-xs text-red-600">
+        <p id={errorId} className="mt-1 text-xs text-danger-600">
           {error}
         </p>
       ) : null}
@@ -57,10 +59,7 @@ export function Field({ label, error, ...props }: {
 /** Form-level failure (e.g. a rejected login). Announced to screen readers. */
 export function FormError({ children }: { children: ReactNode }) {
   return (
-    <p
-      role="alert"
-      className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
-    >
+    <p role="alert" className="lms-alert lms-alert-error mb-4">
       {children}
     </p>
   );
@@ -68,25 +67,24 @@ export function FormError({ children }: { children: ReactNode }) {
 
 export function FormNotice({ children }: { children: ReactNode }) {
   return (
-    <p
-      role="status"
-      className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700"
-    >
+    <p role="status" className="lms-alert lms-alert-success mb-4">
       {children}
     </p>
   );
 }
 
-/** Section container used by the instructor pages. */
+// ── Layout containers ─────────────────────────────────────────────────────────
+
+/** Section container used across instructor and student pages. */
 export function Panel({ title, description, children }: {
   title: string;
   description?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-6">
-      <h2 className="text-base font-semibold text-slate-900">{title}</h2>
-      {description ? <p className="mt-1 text-sm text-slate-500">{description}</p> : null}
+    <section className="lms-card">
+      <h2 className="text-base font-semibold text-neutral-900">{title}</h2>
+      {description ? <p className="mt-1 text-sm text-neutral-500">{description}</p> : null}
       <div className="mt-4">{children}</div>
     </section>
   );
@@ -95,33 +93,35 @@ export function Panel({ title, description, children }: {
 /** Shown in place of a list that has loaded but has nothing in it. */
 export function EmptyState({ children }: { children: ReactNode }) {
   return (
-    <p className="rounded-lg border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-slate-500">
+    <p className="rounded-lg border border-dashed border-neutral-300 px-4 py-6 text-center text-sm text-neutral-500">
       {children}
     </p>
   );
 }
 
-export function Loading({ children = "Loading…" }: { children?: ReactNode }) {
+export function Loading({ children = "Loading..." }: { children?: ReactNode }) {
   return (
-    <p role="status" className="py-4 text-sm text-slate-500">
+    <p role="status" className="py-4 text-sm text-neutral-500">
       {children}
     </p>
   );
 }
 
-/** Small neutral/secondary button (download, delete, cancel). */
+// ── Buttons ───────────────────────────────────────────────────────────────────
+
+/** Small neutral/secondary button (download, cancel, secondary actions). */
 export function SmallButton({
   tone = "neutral",
   ...props
 }: { tone?: "neutral" | "danger" } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  const toneClasses =
+  const toneClass =
     tone === "danger"
-      ? "border-red-300 text-red-700 hover:bg-red-50"
-      : "border-slate-300 text-slate-700 hover:bg-slate-100";
+      ? "border-danger-200 text-danger-700 hover:bg-danger-50"
+      : "border-neutral-300 text-neutral-700 hover:bg-neutral-100";
   return (
     <button
       type="button"
-      className={`rounded-md border px-2.5 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${toneClasses}`}
+      className={`inline-flex items-center rounded border px-2.5 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${toneClass}`}
       {...props}
     />
   );
@@ -129,11 +129,10 @@ export function SmallButton({
 
 export function SubmitButton({
   pending,
-  pendingLabel = "Please wait…",
+  pendingLabel = "Please wait...",
   children,
 }: {
   pending: boolean;
-  /** Override for long operations where "Please wait…" is too vague. */
   pendingLabel?: ReactNode;
   children: ReactNode;
 }) {
@@ -141,33 +140,24 @@ export function SubmitButton({
     <button
       type="submit"
       disabled={pending}
-      className="w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+      className="lms-btn-primary w-full"
     >
       {pending ? pendingLabel : children}
     </button>
   );
 }
 
+// ── Badges ────────────────────────────────────────────────────────────────────
+
 /**
- * Says whether an assignment file is graded or not.
- *
- * Shared rather than duplicated per page: the instructor and the student must
- * see the SAME distinction, and two copies of these class strings would drift.
- * Notebooks and resources come from two structurally separate backend tables,
- * so `role` is passed by the caller from which list the row came out of --
- * never read off the row itself, which carries no role field.
+ * Shows whether an assignment file is gradeable or a resource.
+ * Role is passed by the caller from which table the row came from —
+ * never inferred from the row itself.
  */
 export function FileRoleBadge({ role }: { role: "notebook" | "resource" }) {
-  const isNotebook = role === "notebook";
   return (
-    <span
-      className={
-        isNotebook
-          ? "shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200 ring-inset"
-          : "shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200 ring-inset"
-      }
-    >
-      {isNotebook ? "Gradeable notebook" : "Resource - not graded"}
+    <span className={role === "notebook" ? "lms-badge lms-badge-success" : "lms-badge lms-badge-neutral"}>
+      {role === "notebook" ? "Gradeable notebook" : "Resource - not graded"}
     </span>
   );
 }
