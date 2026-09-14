@@ -134,9 +134,9 @@ export function RegisterForm() {
         <SubmitButton pending={pending}>Create account</SubmitButton>
       </form>
 
-      <p className="mt-6 text-center text-sm text-slate-500">
+      <p className="mt-6 text-center text-sm text-neutral-500">
         Already have an account?{" "}
-        <Link href="/login" className="font-medium text-slate-900 underline">
+        <Link href="/login" className="font-medium text-neutral-900 underline">
           Sign in
         </Link>
       </p>

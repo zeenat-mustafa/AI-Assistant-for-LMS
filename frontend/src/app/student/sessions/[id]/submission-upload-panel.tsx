@@ -17,7 +17,7 @@ import { useRef, useState } from "react";
 
 import { ApiError, uploadSubmission } from "@/lib/api";
 import type { SubmissionRead } from "@/lib/api";
-import { FormError, FormNotice, Panel, SubmitButton } from "@/components/ui";
+import { FormError, FormNotice, SubmitButton } from "@/components/ui";
 
 /** Summarise an upload response -- one entry per file uploaded, whatever it was. */
 export function describeUpload(files: File[]): string {
@@ -78,17 +78,21 @@ export function SubmissionUploadPanel({
   }
 
   return (
-    <Panel
-      title={hasSubmission ? "Add another file" : "Upload your submission"}
-      description="Any file type, single or inside a .zip. Uploading adds to what you've already submitted -- it never replaces or deletes anything."
-    >
+    <div className="lms-card">
+      <h2 className="text-base font-semibold text-neutral-900">
+        {hasSubmission ? "Add another file" : "Upload your submission"}
+      </h2>
+      <p className="mt-1 mb-4 text-sm text-neutral-500">
+        Any file type, single or inside a .zip. Each upload adds to your submission.
+      </p>
+
       {error ? <FormError>{error}</FormError> : null}
       {notice ? <FormNotice>{notice}</FormNotice> : null}
 
       <form onSubmit={handleSubmit} noValidate>
         <label
           htmlFor="submission-files"
-          className="mb-1 block text-sm font-medium text-slate-700"
+          className="mb-1 block text-sm font-medium text-neutral-700"
         >
           Your solved file(s)
         </label>
@@ -99,11 +103,11 @@ export function SubmissionUploadPanel({
           name="files"
           multiple
           onChange={handleSelect}
-          className="mb-4 block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border file:border-slate-300 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700"
+          className="mb-4 block w-full text-sm text-neutral-700 file:mr-3 file:rounded file:border file:border-neutral-300 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-neutral-700"
         />
 
         {selected.length > 0 ? (
-          <ul className="mb-4 list-inside list-disc text-xs text-slate-600">
+          <ul className="mb-4 list-inside list-disc text-xs text-neutral-600">
             {selected.map((file) => (
               <li key={file.name}>{file.name}</li>
             ))}
@@ -114,6 +118,6 @@ export function SubmissionUploadPanel({
           {selected.length > 1 ? `Upload ${selected.length} files` : "Upload"}
         </SubmitButton>
       </form>
-    </Panel>
+    </div>
   );
 }

@@ -100,10 +100,10 @@ export function LoginForm() {
         <SubmitButton pending={pending}>Sign in</SubmitButton>
       </form>
 
-      <p className="mt-6 text-center text-sm text-slate-500">
-        New student?{" "}
-        <Link href="/register" className="font-medium text-slate-900 underline">
-          Create an account
+      <p className="mt-6 text-center text-sm text-neutral-500">
+        No account yet?{" "}
+        <Link href="/register" className="font-medium text-neutral-900 underline">
+          Create one
         </Link>
       </p>
     </AuthCard>
