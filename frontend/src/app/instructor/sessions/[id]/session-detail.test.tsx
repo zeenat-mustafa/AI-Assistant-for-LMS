@@ -118,7 +118,7 @@ beforeEach(() => {
 describe("<SessionDetail /> — loading and header", () => {
   it("shows a loading state, then the session's real fields", async () => {
     render(<SessionDetail sessionId={5} />);
-    expect(screen.getByText(/loading session/i)).toBeInTheDocument();
+    expect(screen.getByText(/loading session details/i)).toBeInTheDocument();
 
     expect(await screen.findByRole("heading", { name: "Week 3 Day 1" })).toBeInTheDocument();
     expect(getSessionMock).toHaveBeenCalledWith(5);

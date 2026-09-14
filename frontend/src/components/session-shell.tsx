@@ -50,9 +50,6 @@ export interface SessionShellProps {
   selectedId: number | null;
   /**
    * Called with a session id when the user clicks a session row.
-   * The parent is responsible for navigation — this just fires the callback.
-   * Keeping it here (rather than hard-coding a Link href) lets both the
-   * instructor and student variants supply the correct route prefix.
    */
   onSelect: (id: number) => void;
   /**
@@ -68,6 +65,18 @@ export interface SessionShellProps {
   emptyLabel?: string;
   /** Whether the session list is still loading. */
   loading?: boolean;
+  /**
+   * Optional: render extra controls after each session row (e.g. rename/delete).
+   * When omitted the row is a plain Link; when provided the row still links but
+   * the extra controls are appended inside the row.
+   */
+  renderItemControls?: (session: SessionListItem) => ReactNode;
+  /**
+   * Optional: render a fully custom row replacing the default Link row.
+   * When provided, onSelect / hrefBase are still called/used by the caller
+   * but the built-in Link is not rendered.
+   */
+  renderItem?: (session: SessionListItem, isSelected: boolean) => ReactNode;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -95,6 +104,7 @@ export function SessionShell({
   children,
   emptyLabel = "No sessions yet.",
   loading = false,
+  renderItem,
 }: SessionShellProps) {
   return (
     /*
@@ -155,36 +165,38 @@ export function SessionShell({
                 const isSelected = s.id === selectedId;
                 return (
                   <li key={s.id}>
-                    <Link
-                      href={`${hrefBase}/${s.id}`}
-                      onClick={() => onSelect(s.id)}
-                      aria-current={isSelected ? "page" : undefined}
-                      className={`
-                        block px-4 py-3 transition-colors
-                        ${
-                          isSelected
-                            ? "bg-primary-50 border-l-2 border-primary-600"
-                            : "border-l-2 border-transparent hover:bg-neutral-100"
-                        }
-                      `}
-                    >
-                      <p
-                        className={`text-sm font-medium leading-snug ${
-                          isSelected ? "text-primary-700" : "text-neutral-800"
-                        }`}
+                    {renderItem ? renderItem(s, isSelected) : (
+                      <Link
+                        href={`${hrefBase}/${s.id}`}
+                        onClick={() => onSelect(s.id)}
+                        aria-current={isSelected ? "page" : undefined}
+                        className={`
+                          block px-4 py-3 transition-colors
+                          ${
+                            isSelected
+                              ? "bg-primary-50 border-l-2 border-primary-600"
+                              : "border-l-2 border-transparent hover:bg-neutral-100"
+                          }
+                        `}
                       >
-                        {s.title}
-                      </p>
-                      <p className="mt-0.5 text-xs text-neutral-400">
-                        {formatDate(s.created_at)}
-                        {s.file_count !== undefined
-                          ? ` · ${s.file_count} file${s.file_count === 1 ? "" : "s"}`
-                          : ""}
-                      </p>
-                      {s.meta ? (
-                        <p className="mt-0.5 text-xs text-neutral-400 truncate">{s.meta}</p>
-                      ) : null}
-                    </Link>
+                        <p
+                          className={`text-sm font-medium leading-snug ${
+                            isSelected ? "text-primary-700" : "text-neutral-800"
+                          }`}
+                        >
+                          {s.title}
+                        </p>
+                        <p className="mt-0.5 text-xs text-neutral-400">
+                          {formatDate(s.created_at)}
+                          {s.file_count !== undefined
+                            ? ` · ${s.file_count} file${s.file_count === 1 ? "" : "s"}`
+                            : ""}
+                        </p>
+                        {s.meta ? (
+                          <p className="mt-0.5 text-xs text-neutral-400 truncate">{s.meta}</p>
+                        ) : null}
+                      </Link>
+                    )}
                   </li>
                 );
               })}

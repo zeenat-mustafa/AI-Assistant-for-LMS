@@ -1,40 +1,16 @@
 "use client";
 
 /**
- * One session: its details, assignment-file upload, and the file list.
+ * Instructor session detail — Phase 7.8
  *
- * One list: exactly what was uploaded (bugfix-original-upload-preservation)
- * ------------------------------------------------------------------------
- * Any file type can be uploaded, single or inside a `.zip`. Whatever was
- * uploaded is the ONLY thing shown or downloadable here -- a zip is one row
- * with its own filename, never a list of what's inside it. Notebooks
- * (standalone or bundled in a zip) are still extracted internally by the
- * backend for grading, exactly as before; that extraction never surfaces as
- * its own row here. Deleting a row removes the upload and everything it
- * produced internally.
+ * Rendered inside the right pane of the SessionShell (mounted at
+ * /instructor/sessions/[id]). SignedInShell and BackLink have been removed
+ * from this file — the shell handles the header and sidebar navigation.
  *
- * `session.unsolved_files`/`resource_files` still ride along on `SessionRead`
- * (used only to compute `totalAssignmentFiles` for the roster below) -- they
- * are never rendered as their own list anymore.
- *
- * Upload goes through 5.1's `uploadAssignment`, which builds a `FormData`
- * and posts it with the bearer token -- deliberately not a `<form action>`
- * Server Action, which runs on the Next server and could not read the JWT
- * from localStorage.
- *
- * Auto-refresh after grading via the floating widget
- * ----------------------------------------------------
- * The floating chat widget (mounted at the instructor layout) has no idea
- * this page exists. It only announces the raw summary message from a
- * completed run (lib/grading-announcements.tsx). This page subscribes and,
- * using the same summaryNamesSession check the old embedded panel used,
- * refetches the grade report + submissions ONLY when the announced run
- * named this session -- restoring same-tab, self-triggered auto-refresh
- * without giving the widget any page-specific knowledge.
+ * All data-fetching and feature logic is unchanged from 7.7.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 
 import {
   ApiError,
@@ -62,23 +38,21 @@ import {
   FormError,
   FormNotice,
   Loading,
-  Panel,
   SmallButton,
   SubmitButton,
 } from "@/components/ui";
 import { formatDate } from "@/lib/format";
 import { triggerBlobDownload } from "@/lib/download";
+import { SessionShell } from "@/components/session-shell";
+import type { SessionListItem } from "@/components/session-shell";
+import { loadAllSessions } from "@/app/instructor/instructor-dashboard";
 
-/**
- * Fetch the session, returning the outcome rather than setting state, so the
- * caller can discard it if it is no longer wanted.
- */
+// ── Data loaders (unchanged) ──────────────────────────────────────────────────
+
 async function loadSessionDetail(
   sessionId: number,
 ): Promise<{ session: SessionRead } | { error: string }> {
   try {
-    // getSession already carries assignment_uploads, so one request covers
-    // both the header and the initial file list.
     return { session: await getSession(sessionId) };
   } catch (error) {
     return {
@@ -87,7 +61,6 @@ async function loadSessionDetail(
   }
 }
 
-/** Same discard-if-stale shape as loadSessionDetail. */
 async function loadGradeReport(
   sessionId: number,
 ): Promise<{ report: SessionGradeReport } | { error: string }> {
@@ -101,9 +74,6 @@ async function loadGradeReport(
   }
 }
 
-/** Same discard-if-stale shape as the loaders above. Silently empty on failure --
- * this only adds download links to the roster, so a failure here must not
- * block the grade report itself from rendering. */
 async function loadSubmissions(sessionId: number): Promise<Record<number, SubmissionRead>> {
   try {
     const subs = await listSubmissions(sessionId);
@@ -113,15 +83,59 @@ async function loadSubmissions(sessionId: number): Promise<Record<number, Submis
   }
 }
 
+// ── Public export ─────────────────────────────────────────────────────────────
+
 export function SessionDetail({ sessionId }: { sessionId: number }) {
   return (
     <RequireAuth role="instructor">
-      <SignedInShell>
-        <SessionDetailBody sessionId={sessionId} />
+      <SignedInShell fullWidth>
+        <SessionDetailWithShell sessionId={sessionId} />
       </SignedInShell>
     </RequireAuth>
   );
 }
+
+// ── Shell wrapper — loads the sidebar session list ────────────────────────────
+
+function SessionDetailWithShell({ sessionId }: { sessionId: number }) {
+  const [allSessions, setAllSessions] = useState<SessionListItem[]>([]);
+  const [shellLoading, setShellLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadAllSessions().then((result) => {
+      if (cancelled) return;
+      if ("sessions" in result) {
+        setAllSessions(
+          result.sessions.map((s) => ({
+            id: s.id,
+            title: s.title,
+            created_at: s.created_at,
+            file_count: s.unsolved_files.length,
+            meta: s.instructor_name ?? undefined,
+          })),
+        );
+      }
+      setShellLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  return (
+    <SessionShell
+      sessions={allSessions}
+      selectedId={sessionId}
+      onSelect={() => {/* navigation handled by Link inside SessionShell */}}
+      hrefBase="/instructor/sessions"
+      listLabel="Sessions"
+      loading={shellLoading}
+    >
+      <SessionDetailBody sessionId={sessionId} />
+    </SessionShell>
+  );
+}
+
+// ── Detail body (logic unchanged from 7.7) ────────────────────────────────────
 
 function SessionDetailBody({ sessionId }: { sessionId: number }) {
   const [session, setSession] = useState<SessionRead | null>(null);
@@ -135,8 +149,6 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
     useState<Record<number, SubmissionRead> | undefined>(undefined);
 
   useEffect(() => {
-    // Guards against a slow response for one session id landing after the
-    // user has already navigated to another.
     let cancelled = false;
     void loadSessionDetail(sessionId).then((result) => {
       if (cancelled) return;
@@ -148,9 +160,7 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
       setUploads(result.session.assignment_uploads);
       setLoadError(null);
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [sessionId]);
 
   useEffect(() => {
@@ -164,9 +174,7 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
       setReport(result.report);
       setReportError(null);
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [sessionId]);
 
   useEffect(() => {
@@ -175,9 +183,7 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
       if (cancelled) return;
       setSubmissionsByStudent(byStudent);
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [sessionId]);
 
   const refreshUploads = useCallback(async () => {
@@ -204,30 +210,21 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
         setSubmissionsByStudent(byStudent);
       },
     );
-    return () => {
-      cancelled = true;
-    };
-    // Re-runs only when a NEW announcement arrives (lastCompletion.id changes)
-    // or this page's own session title becomes known/changes.
+    return () => { cancelled = true; };
   }, [lastCompletion, sessionTitle, sessionId]);
 
   if (loadError) {
-    return (
-      <>
-        <BackLink />
-        <FormError>{loadError}</FormError>
-      </>
-    );
+    return <FormError>{loadError}</FormError>;
   }
 
-  if (!session) return <Loading>Loading session…</Loading>;
+  if (!session) return <Loading>Loading session details...</Loading>;
 
   return (
-    <div className="space-y-8">
-      <div>
-        <BackLink />
-        <h1 className="mt-2 text-2xl font-semibold text-slate-900">{session.title}</h1>
-        <p className="mt-1 text-sm text-slate-600">
+    <div className="space-y-6">
+      {/* Session header */}
+      <div className="border-b border-neutral-200 pb-4">
+        <h1 className="text-2xl font-semibold text-neutral-900">{session.title}</h1>
+        <p className="mt-1 text-sm text-neutral-500">
           Created {formatDate(session.created_at)}
         </p>
       </div>
@@ -247,12 +244,6 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
 
       <LectureFilesPanel sessionId={sessionId} canUpload />
 
-      {/*
-        Notebooks extracted internally, not the uploads list -- resources are
-        never graded and must not inflate the denominator of the combined
-        score. Read straight off the session, since notebooks are no longer
-        separately listed/refreshed in this component.
-      */}
       <GradesRoster
         sessionId={sessionId}
         report={report}
@@ -264,17 +255,8 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
   );
 }
 
-function BackLink() {
-  return (
-    <Link href="/instructor" className="text-sm text-slate-500 underline">
-      Back to all sessions
-    </Link>
-  );
-}
+// ── Upload panel ──────────────────────────────────────────────────────────────
 
-// ── Upload ───────────────────────────────────────────────────────────────────
-
-/** Summarise an upload response -- one entry per file uploaded, whatever it was. */
 export function describeUpload(created: AssignmentUploadRead[]): string {
   if (created.length === 1) {
     return `Uploaded ${created[0].original_filename}.`;
@@ -321,9 +303,6 @@ function UploadPanel({
       setSelected([]);
       if (inputRef.current) inputRef.current.value = "";
     } catch (uploadError) {
-      // The backend validates the whole batch before writing anything, so a
-      // rejection means nothing was saved -- say so, rather than leaving the
-      // instructor unsure which files landed.
       setError(
         uploadError instanceof ApiError
           ? `${uploadError.detail} (nothing was uploaded)`
@@ -335,17 +314,19 @@ function UploadPanel({
   }
 
   return (
-    <Panel
-      title="Upload assignment files"
-      description="Any file type, single or inside a .zip. What you upload is exactly what students and the grade report see -- a zip stays one file; notebooks inside it (standalone or nested) are still graded normally."
-    >
+    <div className="lms-card">
+      <h2 className="text-base font-semibold text-neutral-900">Upload assignment files</h2>
+      <p className="mt-1 mb-4 text-sm text-neutral-500">
+        Any file type, single or inside a .zip. What you upload is exactly what students see.
+      </p>
+
       {error ? <FormError>{error}</FormError> : null}
       {notice ? <FormNotice>{notice}</FormNotice> : null}
 
       <form onSubmit={handleUpload} noValidate>
         <label
           htmlFor="assignment-files"
-          className="mb-1 block text-sm font-medium text-slate-700"
+          className="mb-1 block text-sm font-medium text-neutral-700"
         >
           Files
         </label>
@@ -356,11 +337,11 @@ function UploadPanel({
           name="files"
           multiple
           onChange={handleSelect}
-          className="mb-4 block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border file:border-slate-300 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700"
+          className="mb-4 block w-full text-sm text-neutral-700 file:mr-3 file:rounded file:border file:border-neutral-300 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-neutral-700"
         />
 
         {selected.length > 0 ? (
-          <ul className="mb-4 list-inside list-disc text-xs text-slate-600">
+          <ul className="mb-4 list-inside list-disc text-xs text-neutral-600">
             {selected.map((file) => (
               <li key={file.name}>{file.name}</li>
             ))}
@@ -371,11 +352,11 @@ function UploadPanel({
           {selected.length > 1 ? `Upload ${selected.length} files` : "Upload"}
         </SubmitButton>
       </form>
-    </Panel>
+    </div>
   );
 }
 
-// ── File list ────────────────────────────────────────────────────────────────
+// ── File list panel ───────────────────────────────────────────────────────────
 
 function FileListPanel({
   sessionId,
@@ -383,7 +364,6 @@ function FileListPanel({
   onDeleted,
 }: {
   sessionId: number;
-  /** null while loading. */
   uploads: AssignmentUploadRead[] | null;
   onDeleted: () => Promise<void>;
 }) {
@@ -395,9 +375,6 @@ function FileListPanel({
     setError(null);
     setBusyId(file.id);
     try {
-      // The endpoint requires the bearer token, so a plain <a href> would
-      // 401. Fetch the bytes with auth, then hand the browser a blob URL.
-      // Returns the ORIGINAL bytes exactly -- a zip downloads as that zip.
       const blob = await downloadAssignment(sessionId, file.id);
       triggerBlobDownload(blob, file.original_filename);
     } catch (downloadError) {
@@ -432,22 +409,26 @@ function FileListPanel({
   const loading = uploads === null;
 
   return (
-    <Panel title="Assignment files">
+    <div className="lms-card">
+      <h2 className="text-base font-semibold text-neutral-900">Assignment files</h2>
+
       {error ? <FormError>{error}</FormError> : null}
 
       {loading ? (
-        <Loading>Loading files…</Loading>
+        <Loading>Loading files...</Loading>
       ) : uploads.length === 0 ? (
-        <EmptyState>No assignment files yet. Upload one above.</EmptyState>
+        <div className="mt-4">
+          <EmptyState>No assignment files yet. Upload one above.</EmptyState>
+        </div>
       ) : (
-        <ul className="divide-y divide-slate-200">
+        <ul className="mt-4 divide-y divide-neutral-100">
           {uploads.map((file) => (
             <li key={file.id} className="flex items-center justify-between gap-4 py-3">
               <span className="min-w-0">
-                <span className="block truncate text-sm font-medium text-slate-900">
+                <span className="block truncate text-sm font-medium text-neutral-900">
                   {file.original_filename}
                 </span>
-                <span className="block text-xs text-slate-500">
+                <span className="block text-xs text-neutral-400">
                   Uploaded {formatDate(file.uploaded_at)}
                 </span>
               </span>
@@ -485,6 +466,6 @@ function FileListPanel({
           ))}
         </ul>
       )}
-    </Panel>
+    </div>
   );
 }
