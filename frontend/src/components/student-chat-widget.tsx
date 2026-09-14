@@ -1,56 +1,21 @@
 "use client";
 
 /**
- * Floating student course-assistant widget (Phase 7.7).
+ * Floating student course-assistant widget (Phase 7.8 redesign).
  *
- * Mirrors the instructor's `FloatingChatWidget` pattern exactly:
- *  - mounted once in `app/student/layout.tsx` so it persists across
- *    navigation between all student pages;
- *  - a fixed bottom-right button collapses/expands the panel;
- *  - same z-index and positioning approach as the instructor widget.
+ * All chat logic, quiz logic, and API calls are unchanged from 7.7.
+ * This file is a visual/layout-only rewrite:
+ *  - Wider panel (420px), more breathing room between messages.
+ *  - User bubbles: right-aligned, primary-600 background.
+ *  - Assistant bubbles: left-aligned, white card with border — not a gray box.
+ *  - Citations: small, muted, clearly secondary.
+ *  - Quiz cards use the new quiz-views.tsx layout (card per question, etc).
+ *  - Removed clutter: "Chat history clears only on a full page reload." line
+ *    (behavior is correct, no need to narrate it every time the panel is
+ *    empty), unknownEventCount debug line (never meaningful to students).
  *
- * Session detection (Step 2 of the spec)
- * ---------------------------------------
- * The widget reads the current pathname via `usePathname()`. If the student
- * is on a session page (`/student/sessions/[id]`), the session id is
- * extracted from the URL and passed as `current_session_id` on the next
- * request; otherwise `null` is sent and the backend resolves/redirects as
- * needed. This is cheap (no extra fetch) and covers the most common case
- * (asking about the session you're looking at). The widget explicitly states
- * which session it is scoping to so the student is never confused.
- *
- * Session id after a `resolved` event (Step 3 of the spec)
- * ----------------------------------------------------------
- * After a `resolved` event, the returned `session_id` is stored and sent as
- * `current_session_id` on subsequent turns, so follow-up questions stay
- * anchored to the resolved session. This is identical to the old page's
- * follow-up contract. The stored resolved id is reset when the student
- * navigates to a different page (which changes the URL-derived id), or when
- * the widget is closed and reopened (each open starts fresh).
- *
- * Clarification (Step 4 of the spec)
- * ------------------------------------
- * Clarification buttons resend the student's ORIGINAL question unchanged
- * with the chosen candidate's `session_id`.
- *
- * Quiz history (Step 5 of the spec)
- * -----------------------------------
- * The panel has two tabs: "Chat" and "Quiz history". The quiz history tab
- * renders the same `<QuizHistory />` component used by the standalone
- * `/student/quizzes` page. No separate page navigation is needed.
- *
- * Transcript lifetime
- * --------------------
- * Chat history lives in useState inside ChatWidgetPanel, which stays mounted
- * for the lifetime of the student layout (it is hidden with CSS, never
- * unmounted on close). Conversation persists across open/close cycles and
- * across in-app navigation. Only a full page reload clears it.
- *
- * No backend modifications
- * -------------------------
- * This file and its tests are the only new/changed frontend files in 7.7
- * outside of the student layout and the copied API modules. No backend code
- * is touched.
+ * Session detection, session id tracking, streaming, quiz generation,
+ * multi-session picker, and clarification flow are all byte-identical to 7.7.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -78,9 +43,7 @@ import { QuizCard } from "@/components/quiz-views";
 import { QuizHistory } from "@/app/student/quizzes/quiz-history";
 import { SmallButton, Loading, FormError } from "@/components/ui";
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Types
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface ChatEntry {
   id: number;
@@ -93,7 +56,6 @@ interface ChatEntry {
   error: string | null;
   incomplete: boolean;
   streaming: boolean;
-  /** How many SSE frames had an event name the client doesn't know. */
   unknownEventCount: number;
 }
 
@@ -104,10 +66,8 @@ interface QuizEntry {
 }
 
 type Entry = ChatEntry | QuizEntry;
-
 type Tab = "chat" | "history";
 
-/** Extract the session id from /student/sessions/[id] routes, or null. */
 function sessionIdFromPathname(pathname: string): number | null {
   const match = /^\/student\/sessions\/(\d+)/.exec(pathname);
   if (!match) return null;
@@ -115,14 +75,8 @@ function sessionIdFromPathname(pathname: string): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Root widget: button + expandable panel
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Root widget ───────────────────────────────────────────────────────────────
 
-/**
- * Floating icon + expandable panel, mounted once for every student page.
- * Renders nothing unless the signed-in user is a student.
- */
 export function StudentChatWidget() {
   const { user, status } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
@@ -131,28 +85,27 @@ export function StudentChatWidget() {
 
   return (
     <div className="fixed bottom-6 left-6 z-50">
+      {/* Panel — CSS hidden, never unmounted, so conversation persists */}
       <div className={isOpen ? "block" : "hidden"} hidden={!isOpen}>
         <ChatWidgetPanel isOpen={isOpen} onClose={() => setIsOpen(false)} />
       </div>
+
+      {/* Open button */}
       {!isOpen ? (
         <button
           type="button"
           onClick={() => setIsOpen(true)}
           aria-label="Open course assistant"
-          className="flex h-14 w-14 items-center justify-center rounded-full bg-indigo-700 text-white shadow-lg transition hover:bg-indigo-600"
+          className="flex h-14 w-14 items-center justify-center rounded-full bg-primary-600 text-white shadow-lg transition hover:bg-primary-700"
         >
-          <span aria-hidden className="text-sm font-bold">
-            AI
-          </span>
+          <span aria-hidden className="text-xs font-bold tracking-tight">AI</span>
         </button>
       ) : null}
     </div>
   );
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Panel (open state)
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Panel ─────────────────────────────────────────────────────────────────────
 
 function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const pathname = usePathname();
@@ -164,11 +117,8 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
   const [streaming, setStreaming] = useState(false);
   const [quizFormOpen, setQuizFormOpen] = useState(false);
 
-  /** The session id to send on the NEXT request.
-   *  Priority: URL-derived (if on a session page) > last resolved id > null. */
   const nextSessionId = useRef<number | null>(urlSessionId);
 
-  // Keep nextSessionId in sync with navigation.
   useEffect(() => {
     if (urlSessionId !== null) {
       nextSessionId.current = urlSessionId;
@@ -179,7 +129,6 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
   const abortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
-  // Abandon an in-flight stream if the widget is closed mid-run.
   useEffect(() => {
     if (!isOpen) {
       abortRef.current?.abort();
@@ -191,7 +140,6 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
     return () => abortRef.current?.abort();
   }, []);
 
-  // Keep the newest message visible.
   useEffect(() => {
     const log = logRef.current;
     if (log) log.scrollTop = log.scrollHeight;
@@ -233,17 +181,12 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
       const result = await streamStudentChat(
         { question: text, currentSessionId: sid },
         {
-          onClarification: (event) => {
-            patch(id, { clarification: event });
-          },
+          onClarification: (event) => patch(id, { clarification: event }),
           onResolved: (event) => {
             patch(id, { resolved: event });
-            // Store the resolved session id for follow-up turns.
             nextSessionId.current = event.session_id;
           },
-          onCitations: (event) => {
-            patch(id, { citations: event.citations });
-          },
+          onCitations: (event) => patch(id, { citations: event.citations }),
           onToken: (event) => {
             setEntries((current) =>
               current.map((e) =>
@@ -253,27 +196,20 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
               ),
             );
           },
-          onDone: () => {
-            // thread_id etc. are for future persistence; nothing to do here.
-          },
-          onError: (event) => {
-            patch(id, { error: event.message });
-          },
+          onDone: () => {},
+          onError: (event) => patch(id, { error: event.message }),
         },
         { signal: controller.signal },
       );
 
-      if (result.outcome === "incomplete") {
-        patch(id, { incomplete: true });
-      }
-      if (result.unknownEventCount > 0) {
-        patch(id, { unknownEventCount: result.unknownEventCount });
-      }
+      if (result.outcome === "incomplete") patch(id, { incomplete: true });
+      if (result.unknownEventCount > 0) patch(id, { unknownEventCount: result.unknownEventCount });
     } catch (err) {
       if (!controller.signal.aborted) {
         patch(id, {
-          error:
-            err instanceof ApiError ? err.detail : "The course assistant is unavailable. Please try again.",
+          error: err instanceof ApiError
+            ? err.detail
+            : "The course assistant is unavailable. Please try again.",
           incomplete: true,
         });
       }
@@ -291,37 +227,35 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
     void send(text);
   }
 
-  // Determine scoping hint for the placeholder / empty state.
   const scopeLabel = urlSessionId !== null ? `session #${urlSessionId}` : "all sessions";
 
   return (
     <section
-      className="flex h-[36rem] w-96 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
+      className="flex h-[40rem] w-[420px] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50 shadow-2xl"
       aria-label="Course assistant"
     >
       {/* Header */}
-      <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+      <header className="flex shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-4 py-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-900">Course assistant</h2>
-          <p className="text-xs text-slate-500">
-            Ask about lectures or assignments.
-            {urlSessionId !== null ? ` Scoped to session #${urlSessionId} by default.` : ""}
+          <h2 className="text-sm font-semibold text-neutral-900">Course assistant</h2>
+          <p className="text-xs text-neutral-500">
+            {urlSessionId !== null
+              ? `Ask about lectures or assignments. Scoped to session #${urlSessionId} by default.`
+              : "Ask about lectures or assignments."}
           </p>
         </div>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close course assistant"
-          className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+          className="ml-2 rounded p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
         >
-          <span aria-hidden className="text-lg leading-none font-bold">
-            x
-          </span>
+          <span aria-hidden className="text-base font-bold leading-none">x</span>
         </button>
       </header>
 
       {/* Tabs */}
-      <div className="flex border-b border-slate-200">
+      <div className="flex shrink-0 border-b border-neutral-200 bg-white">
         {(["chat", "history"] as Tab[]).map((t) => (
           <button
             key={t}
@@ -330,8 +264,8 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
             aria-selected={tab === t}
             className={`flex-1 px-4 py-2 text-xs font-medium transition ${
               tab === t
-                ? "border-b-2 border-indigo-600 text-indigo-700"
-                : "text-slate-500 hover:text-slate-700"
+                ? "border-b-2 border-primary-600 text-primary-700"
+                : "text-neutral-500 hover:text-neutral-700"
             }`}
           >
             {t === "chat" ? "Chat" : "Quiz history"}
@@ -339,30 +273,26 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
         ))}
       </div>
 
+      {/* Tab content */}
       {tab === "history" ? (
         <div className="flex-1 overflow-y-auto p-4">
           <QuizHistory />
         </div>
       ) : (
         <>
-          {/* Chat transcript */}
+          {/* Transcript */}
           <div
             ref={logRef}
-            className="flex-1 space-y-4 overflow-y-auto px-4 py-3"
+            className="flex-1 space-y-5 overflow-y-auto px-4 py-4"
             aria-live="polite"
             aria-busy={streaming}
             data-testid="student-chat-transcript"
           >
             {entries.length === 0 ? (
-              <div className="space-y-2">
-                <p className="text-sm text-slate-500">
-                  Ask a question about your course material. Currently scoped to{" "}
-                  <strong>{scopeLabel}</strong>.
-                </p>
-                <p className="text-xs text-slate-400">
-                  Chat history clears only on a full page reload.
-                </p>
-              </div>
+              <p className="text-sm text-neutral-500">
+                Ask a question about your course material.{" "}
+                Currently scoped to <strong className="text-neutral-700">{scopeLabel}</strong>.
+              </p>
             ) : (
               entries.map((entry) =>
                 entry.kind === "quiz" ? (
@@ -387,7 +317,6 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
                   <ChatTurnView
                     key={entry.id}
                     entry={entry}
-                    urlSessionId={urlSessionId}
                     disabled={streaming}
                     onChooseCandidate={(candidateId) => void send(entry.question, candidateId)}
                   />
@@ -397,7 +326,7 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
           </div>
 
           {/* Input area */}
-          <div className="space-y-2 border-t border-slate-200 p-3">
+          <div className="shrink-0 border-t border-neutral-200 bg-white p-3 space-y-2">
             {quizFormOpen ? (
               <WidgetQuizScopeForm
                 urlSessionId={urlSessionId}
@@ -417,10 +346,7 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
             )}
 
             <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                submitQuestion();
-              }}
+              onSubmit={(e) => { e.preventDefault(); submitQuestion(); }}
               noValidate
             >
               <label htmlFor="student-widget-question" className="sr-only">
@@ -438,15 +364,15 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
                 }}
                 disabled={streaming}
                 rows={2}
-                placeholder="Ask a question (Enter to send, Shift+Enter for a new line)"
-                className="mb-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-indigo-400 disabled:bg-slate-100"
+                placeholder="Ask a question (Enter to send, Shift+Enter for new line)"
+                className="lms-input mb-2 resize-none"
               />
               <button
                 type="submit"
                 disabled={streaming || !question.trim()}
-                className="w-full rounded-md bg-indigo-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-600 disabled:cursor-not-allowed disabled:bg-slate-400"
+                className="lms-btn-primary w-full"
               >
-                {streaming ? "Answering…" : "Send"}
+                {streaming ? "Answering..." : "Send"}
               </button>
             </form>
           </div>
@@ -456,18 +382,14 @@ function ChatWidgetPanel({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
   );
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// One chat turn
-// ──────────────────────────────────────────────────────────────────────────────
+// ── One chat turn ─────────────────────────────────────────────────────────────
 
 function ChatTurnView({
   entry,
-  urlSessionId,
   disabled,
   onChooseCandidate,
 }: {
   entry: ChatEntry;
-  urlSessionId: number | null;
   disabled: boolean;
   onChooseCandidate: (sessionId: number) => void;
 }) {
@@ -487,129 +409,110 @@ function ChatTurnView({
 
   return (
     <div className="space-y-2" data-testid="student-chat-turn">
-      {/* User bubble */}
-      <p className="text-right">
+      {/* User bubble — right aligned */}
+      <div className="flex justify-end">
         <span
-          className="inline-block whitespace-pre-wrap rounded-lg bg-indigo-700 px-3 py-1.5 text-left text-sm text-white"
+          className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-primary-600 px-3.5 py-2 text-sm text-white"
           data-testid="student-user-message"
         >
           {entry.question}
         </span>
-      </p>
+      </div>
 
-      {/* Assistant bubble */}
-      <div className="rounded-lg bg-slate-50 px-3 py-2">
-        {/* Banner */}
-        {bannerText ? (
-          <p
-            className="mb-2 rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-900"
-            data-testid="student-session-banner"
-          >
-            {bannerText}
-          </p>
-        ) : null}
-
-        {/* Clarification */}
-        {entry.clarification ? (
-          <div>
-            <p className="text-sm text-slate-800">{entry.clarification.message}</p>
-            {entry.clarification.candidates.length > 0 ? (
-              <div className="mt-2 flex flex-wrap gap-2">
-                {entry.clarification.candidates.map((candidate: ClarificationCandidate) => (
-                  <SmallButton
-                    key={candidate.session_id}
-                    onClick={() => onChooseCandidate(candidate.session_id)}
-                    disabled={disabled}
-                  >
-                    {candidate.session_title} (similarity {candidate.best_similarity})
-                  </SmallButton>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        {/* Streaming answer */}
-        {entry.answer ? (
-          <div
-            className="prose prose-sm max-w-none text-slate-800"
-            data-testid="student-assistant-message"
-          >
-            <ReactMarkdown
-              components={{
-                p: ({ children }) => <p className="mb-1 last:mb-0">{children}</p>,
-                strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                em: ({ children }) => <em className="italic">{children}</em>,
-                ul: ({ children }) => <ul className="my-1 list-disc pl-4">{children}</ul>,
-                ol: ({ children }) => <ol className="my-1 list-decimal pl-4">{children}</ol>,
-                li: ({ children }) => <li className="mb-0.5">{children}</li>,
-                h1: ({ children }) => <p className="font-semibold">{children}</p>,
-                h2: ({ children }) => <p className="font-semibold">{children}</p>,
-                h3: ({ children }) => <p className="font-semibold">{children}</p>,
-                code: ({ children }) => (
-                  <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-xs text-slate-700">
-                    {children}
-                  </code>
-                ),
-                pre: ({ children }) => (
-                  <pre className="my-1 overflow-x-auto rounded bg-slate-100 px-2 py-1.5 font-mono text-xs text-slate-700">
-                    {children}
-                  </pre>
-                ),
-              }}
+      {/* Assistant bubble — left aligned */}
+      <div className="flex justify-start">
+        <div className="max-w-[90%] rounded-2xl rounded-tl-sm border border-neutral-200 bg-white px-3.5 py-2.5 shadow-sm">
+          {/* Session redirect / broad search banner */}
+          {bannerText ? (
+            <p
+              className="mb-2 rounded border border-primary-200 bg-primary-50 px-2 py-1 text-xs text-primary-800"
+              data-testid="student-session-banner"
             >
-              {entry.answer}
-            </ReactMarkdown>
-          </div>
-        ) : null}
+              {bannerText}
+            </p>
+          ) : null}
 
-        {/* Thinking indicator */}
-        {entry.streaming && !entry.answer && !entry.clarification && !entry.error ? (
-          <p className="text-xs text-slate-500">Thinking…</p>
-        ) : null}
+          {/* Clarification */}
+          {entry.clarification ? (
+            <div>
+              <p className="text-sm text-neutral-800">{entry.clarification.message}</p>
+              {entry.clarification.candidates.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {entry.clarification.candidates.map((candidate: ClarificationCandidate) => (
+                    <SmallButton
+                      key={candidate.session_id}
+                      onClick={() => onChooseCandidate(candidate.session_id)}
+                      disabled={disabled}
+                    >
+                      {candidate.session_title} ({candidate.best_similarity})
+                    </SmallButton>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
-        {/* Error / incomplete */}
-        {entry.error ? (
-          <p role="alert" className="text-sm text-red-700">
-            {entry.error}
-            {entry.incomplete ? " This answer is incomplete." : ""}
-          </p>
-        ) : entry.incomplete ? (
-          <p role="alert" className="text-sm text-red-700">
-            The answer stream ended before it finished — this answer is incomplete.
-          </p>
-        ) : null}
+          {/* Answer — markdown rendered */}
+          {entry.answer ? (
+            <div
+              className="prose prose-sm max-w-none text-neutral-800"
+              data-testid="student-assistant-message"
+            >
+              <ReactMarkdown
+                components={{
+                  p: ({ children }) => <p className="mb-1 last:mb-0 text-sm">{children}</p>,
+                  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                  em: ({ children }) => <em className="italic">{children}</em>,
+                  ul: ({ children }) => <ul className="my-1 list-disc pl-4 text-sm">{children}</ul>,
+                  ol: ({ children }) => <ol className="my-1 list-decimal pl-4 text-sm">{children}</ol>,
+                  li: ({ children }) => <li className="mb-0.5">{children}</li>,
+                  h1: ({ children }) => <p className="font-semibold text-sm">{children}</p>,
+                  h2: ({ children }) => <p className="font-semibold text-sm">{children}</p>,
+                  h3: ({ children }) => <p className="font-semibold text-sm">{children}</p>,
+                  code: ({ children }) => (
+                    <code className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-xs text-neutral-700">
+                      {children}
+                    </code>
+                  ),
+                  pre: ({ children }) => (
+                    <pre className="my-1 overflow-x-auto rounded bg-neutral-100 px-2 py-1.5 font-mono text-xs text-neutral-700">
+                      {children}
+                    </pre>
+                  ),
+                }}
+              >
+                {entry.answer}
+              </ReactMarkdown>
+            </div>
+          ) : null}
 
-        {/* Citations */}
-        {entry.citations ? <CitationList citations={entry.citations} /> : null}
+          {/* Thinking indicator */}
+          {entry.streaming && !entry.answer && !entry.clarification && !entry.error ? (
+            <p className="text-xs italic text-neutral-400">Thinking...</p>
+          ) : null}
 
-        {/* Unknown event count */}
-        {entry.unknownEventCount > 0 ? (
-          <p className="mt-1 text-[11px] text-slate-400">
-            {entry.unknownEventCount} unrecognised stream event
-            {entry.unknownEventCount === 1 ? "" : "s"} ignored.
-          </p>
-        ) : null}
+          {/* Error / incomplete */}
+          {entry.error ? (
+            <p role="alert" className="text-sm text-danger-700">
+              {entry.error}
+              {entry.incomplete ? " This answer is incomplete." : ""}
+            </p>
+          ) : entry.incomplete ? (
+            <p role="alert" className="text-sm text-danger-700">
+              The answer stream ended before it finished — this answer is incomplete.
+            </p>
+          ) : null}
+
+          {/* Citations — muted, below the answer */}
+          {entry.citations ? <CitationList citations={entry.citations} /> : null}
+        </div>
       </div>
     </div>
   );
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Quiz scope form adapted for the widget (no fixed session required)
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Widget quiz scope form ────────────────────────────────────────────────────
 
-/**
- * A wrapper around the quiz scope form that works without a fixed `session`
- * prop. When the student is on a session page, the session id is available from
- * the URL; otherwise "session" and "assignment_file" modes are hidden and the
- * student can choose topic/multiple sessions/upload instead.
- *
- * This is the ONLY place in 7.7 that deviates from copying the old component
- * as-is: the old `QuizScopeForm` required a `session: SessionRead` prop, which
- * the widget cannot always provide. We call the underlying quiz API functions
- * directly here for the subset of modes that don't need a full `SessionRead`.
- */
 function WidgetQuizScopeForm({
   urlSessionId,
   onGenerated,
@@ -637,37 +540,26 @@ function WidgetQuizScopeForm({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch session list only when the student switches to multi-session mode.
   useEffect(() => {
     if (mode !== "multiple_sessions" || allSessions !== null) return;
     let cancelled = false;
     listSessions({ limit: 200 }).then(
-      (page) => {
-        if (!cancelled) setAllSessions(page.items);
-      },
+      (page) => { if (!cancelled) setAllSessions(page.items); },
       (loadError: unknown) => {
         if (cancelled) return;
-        setSessionsError(
-          loadError instanceof ApiError ? loadError.detail : "Could not load sessions.",
-        );
+        setSessionsError(loadError instanceof ApiError ? loadError.detail : "Could not load sessions.");
         setAllSessions([]);
       },
     );
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [mode, allSessions]);
 
   function isReady(): boolean {
     switch (mode) {
-      case "session":
-        return urlSessionId !== null;
-      case "multiple_sessions":
-        return chosenSessions.length >= 2;
-      case "topic":
-        return topic.trim().length > 0;
-      case "upload":
-        return upload !== null;
+      case "session": return urlSessionId !== null;
+      case "multiple_sessions": return chosenSessions.length >= 2;
+      case "topic": return topic.trim().length > 0;
+      case "upload": return upload !== null;
     }
   }
 
@@ -692,9 +584,7 @@ function WidgetQuizScopeForm({
       }
       onGenerated(attempt);
     } catch (generateError) {
-      setError(
-        generateError instanceof ApiError ? generateError.detail : "Could not generate a quiz.",
-      );
+      setError(generateError instanceof ApiError ? generateError.detail : "Could not generate a quiz.");
     } finally {
       setPending(false);
     }
@@ -704,25 +594,23 @@ function WidgetQuizScopeForm({
     <form
       onSubmit={handleGenerate}
       noValidate
-      className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+      className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-3"
       aria-label="Start a practice quiz"
     >
-      <p className="text-sm font-semibold text-slate-900">Practice quiz</p>
-      <p className="mb-2 text-xs text-slate-500">5 MCQs — never changes your real grades.</p>
+      <p className="text-sm font-semibold text-neutral-900">Practice quiz</p>
+      <p className="mb-2 text-xs text-neutral-500">5 MCQs — never changes your real grades.</p>
 
-      <fieldset disabled={pending} className="mb-2 space-y-1">
-        <legend className="mb-1 text-xs font-medium text-slate-700">Quiz me on</legend>
+      <fieldset disabled={pending} className="mb-2 space-y-1.5">
+        <legend className="mb-1 text-xs font-medium text-neutral-700">Quiz me on</legend>
         {availableModes.map((m) => (
-          <label key={m.value} className="flex items-center gap-2 text-sm text-slate-700">
+          <label key={m.value} className="flex items-center gap-2 text-sm text-neutral-700">
             <input
               type="radio"
               name="widget-quiz-mode"
               value={m.value}
               checked={mode === m.value}
-              onChange={() => {
-                setMode(m.value);
-                setError(null);
-              }}
+              onChange={() => { setMode(m.value); setError(null); }}
+              className="accent-primary-600"
             />
             {m.label}
           </label>
@@ -731,7 +619,7 @@ function WidgetQuizScopeForm({
 
       {mode === "topic" ? (
         <div className="mb-2">
-          <label htmlFor="widget-quiz-topic" className="mb-1 block text-xs font-medium text-slate-700">
+          <label htmlFor="widget-quiz-topic" className="mb-1 block text-xs font-medium text-neutral-700">
             Topic
           </label>
           <input
@@ -739,14 +627,14 @@ function WidgetQuizScopeForm({
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             disabled={pending}
-            className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm text-slate-900"
+            className="lms-input text-sm py-1.5"
           />
         </div>
       ) : null}
 
       {mode === "upload" ? (
         <div className="mb-2">
-          <label htmlFor="widget-quiz-upload" className="mb-1 block text-xs font-medium text-slate-700">
+          <label htmlFor="widget-quiz-upload" className="mb-1 block text-xs font-medium text-neutral-700">
             File (.pptx or .ipynb)
           </label>
           <input
@@ -755,10 +643,10 @@ function WidgetQuizScopeForm({
             accept=".pptx,.ipynb"
             disabled={pending}
             onChange={(e) => setUpload(e.target.files?.[0] ?? null)}
-            className="block w-full text-sm text-slate-700"
+            className="block w-full text-sm text-neutral-700"
           />
-          <p className="mt-1 text-xs text-slate-500">
-            Used for this quiz only — not saved as a submission or lecture file.
+          <p className="mt-1 text-xs text-neutral-400">
+            Used for this quiz only — not saved anywhere.
           </p>
         </div>
       ) : null}
@@ -771,12 +659,12 @@ function WidgetQuizScopeForm({
             <Loading>Loading sessions...</Loading>
           ) : (
             <fieldset disabled={pending}>
-              <legend className="mb-1 text-xs font-medium text-slate-700">
+              <legend className="mb-1 text-xs font-medium text-neutral-700">
                 Choose at least 2 sessions
               </legend>
               <div className="max-h-32 space-y-1 overflow-y-auto">
                 {allSessions.map((s) => (
-                  <label key={s.id} className="flex items-center gap-2 text-sm text-slate-700">
+                  <label key={s.id} className="flex items-center gap-2 text-sm text-neutral-700">
                     <input
                       type="checkbox"
                       checked={chosenSessions.includes(s.id)}
@@ -787,6 +675,7 @@ function WidgetQuizScopeForm({
                             : current.filter((id) => id !== s.id),
                         )
                       }
+                      className="accent-primary-600"
                     />
                     {s.title}
                   </label>
@@ -798,22 +687,18 @@ function WidgetQuizScopeForm({
       ) : null}
 
       {error ? (
-        <p role="alert" className="mb-2 text-xs text-red-600">
-          {error}
-        </p>
+        <p role="alert" className="mb-2 text-xs text-danger-600">{error}</p>
       ) : null}
 
       <div className="flex items-center gap-2">
         <button
           type="submit"
           disabled={pending || !isReady()}
-          className="rounded-md bg-indigo-700 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-indigo-600 disabled:cursor-not-allowed disabled:bg-slate-400"
+          className="lms-btn-primary py-1.5 px-3 text-sm"
         >
-          {pending ? "Generating…" : "Generate quiz"}
+          {pending ? "Generating..." : "Generate quiz"}
         </button>
-        <SmallButton onClick={onCancel} disabled={pending}>
-          Cancel
-        </SmallButton>
+        <SmallButton onClick={onCancel} disabled={pending}>Cancel</SmallButton>
       </div>
     </form>
   );

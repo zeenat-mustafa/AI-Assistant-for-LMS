@@ -1,444 +1,281 @@
 "use client";
 
-
-
 /**
-
- * Practice-quiz card and result (Phase 7.7, surfacing 7.6).
-
+ * Practice-quiz card and result (Phase 7.8 redesign).
  *
-
- * - The card reads ONLY `question`, `options`, `source_citation` from each
-
- *   question, so even if a future backend started sending an answer early it
-
- *   could not reach the DOM before submission.
-
- * - The score is displayed exactly as returned. Nothing here tallies
-
- *   `is_correct`, rounds, or re-derives `score_label`.
-
- * - Both the card and the result carry a permanent, non-dismissible
-
- *   "does not affect real grades" line.
-
+ * Logic and API calls unchanged from 7.7. Appearance rebuilt:
+ *  - Each question in its own card block with clear spacing.
+ *  - Selected radio option highlighted with primary-50 background.
+ *  - Result view: success/danger color per option row, large score headline.
+ *  - Removed: "Recorded by the server as not a real grade." (redundant with
+ *    PracticeLabel which already states this on every quiz).
  */
-
-
 
 import { useState, type ReactNode } from "react";
 
-
-
 import { ApiError, getQuizAttempt, isQuizResult, submitQuiz } from "@/lib/api";
-
 import type { QuizAttemptOut, QuizResultOut, QuizScopeDetail } from "@/lib/api";
-
-import { FormError } from "@/components/ui";
-
 import { QuizSourceLine } from "@/components/citation-list";
 
-
-
 export const PRACTICE_ONLY_LINE =
-
   "Practice only — this quiz never changes your real grades.";
 
-
-
 const SCOPE_LABELS: Record<string, string> = {
-
   assignment_file: "Assignment file",
-
   session: "Session",
-
   multiple_sessions: "Multiple sessions",
-
   topic: "Topic",
-
   uploaded_file: "Uploaded file",
-
 };
 
-
-
-/** The requested scope as stored: the type plus its raw detail values, nothing looked up or invented. */
-
 export function describeScope(scopeType: string, detail: QuizScopeDetail): string {
-
   const label = SCOPE_LABELS[scopeType] ?? scopeType;
-
   const parts = Object.entries(detail)
-
     .filter(([, value]) => value !== null && value !== undefined)
-
     .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`);
-
   return parts.length ? `${label} (${parts.join("; ")})` : label;
-
 }
-
-
 
 function PracticeLabel({ notice }: { notice?: string }) {
-
   return (
-
-    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-
-      {notice ? <p>{notice}</p> : null}
-
+    <div className="rounded border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-700">
+      {notice ? <p className="mb-0.5">{notice}</p> : null}
       <p className="font-medium">{PRACTICE_ONLY_LINE}</p>
-
     </div>
-
   );
-
 }
 
-
-
-/** One generated quiz inside the chat transcript: answer, submit, then the backend's result. */
+// ── Quiz card (unanswered) ────────────────────────────────────────────────────
 
 export function QuizCard({
-
   attempt,
-
   resultFooter,
-
 }: {
-
   attempt: QuizAttemptOut;
-
-  /** Extra line under the result (the chat page's "this visit only" note). */
-
   resultFooter?: ReactNode;
-
 }) {
-
   const [answers, setAnswers] = useState<(number | null)[]>(() =>
-
     attempt.questions.map(() => null),
-
   );
-
   const [pending, setPending] = useState(false);
-
   const [error, setError] = useState<string | null>(null);
-
   const [result, setResult] = useState<QuizResultOut | null>(null);
-
-
 
   if (result) return <QuizResultView result={result} footer={resultFooter} />;
 
-
-
   const allAnswered = answers.every((a) => a !== null);
 
-
-
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-
     event.preventDefault();
-
     if (!allAnswered || pending) return;
-
     setError(null);
-
     setPending(true);
-
     try {
-
       setResult(await submitQuiz(attempt.id, answers as number[]));
-
     } catch (submitError) {
-
       if (submitError instanceof ApiError && submitError.status === 409) {
-
-        // Already submitted (e.g. another tab) -- show the stored result, not an error.
-
         try {
-
           const stored = await getQuizAttempt(attempt.id);
-
           if (isQuizResult(stored)) {
-
             setResult(stored);
-
           } else {
-
             setError(submitError.detail);
-
           }
-
         } catch (fetchError) {
-
           setError(
-
             fetchError instanceof ApiError ? fetchError.detail : "Could not load this quiz's result.",
-
           );
-
         }
-
       } else {
-
         setError(
-
           submitError instanceof ApiError ? submitError.detail : "Could not submit this quiz.",
-
         );
-
       }
-
     } finally {
-
       setPending(false);
-
     }
-
   }
 
-
-
   return (
-
     <section
-
-      className="rounded-lg border border-slate-200 bg-white px-4 py-3"
-
+      className="rounded-xl border border-neutral-200 bg-white shadow-sm"
       aria-label="Practice quiz"
-
     >
+      {/* Quiz header */}
+      <div className="border-b border-neutral-100 px-4 py-3">
+        <h3 className="text-sm font-semibold text-neutral-900">Practice quiz</h3>
+        <p className="mt-0.5 text-xs text-neutral-500">
+          {describeScope(attempt.scope_type, attempt.scope_detail)}
+        </p>
+      </div>
 
-      <h3 className="text-sm font-semibold text-slate-900">Practice quiz</h3>
+      <div className="px-4 pt-3 pb-1">
+        <PracticeLabel notice={attempt.notice} />
+      </div>
 
-      <p className="mb-2 text-xs text-slate-500">
-
-        {describeScope(attempt.scope_type, attempt.scope_detail)}
-
-      </p>
-
-      <PracticeLabel notice={attempt.notice} />
-
-
-
-      <form onSubmit={handleSubmit} noValidate className="mt-3 space-y-4">
-
+      <form onSubmit={handleSubmit} noValidate className="divide-y divide-neutral-100">
         {attempt.questions.map((question, qi) => (
-
-          <fieldset key={qi} disabled={pending}>
-
-            <legend className="text-sm font-medium text-slate-900">
-
-              {qi + 1}. {question.question}
-
+          <fieldset key={qi} disabled={pending} className="px-4 py-4">
+            <legend className="text-sm font-medium text-neutral-900 leading-snug">
+              <span className="text-neutral-400 mr-1">{qi + 1}.</span>
+              {question.question}
             </legend>
 
-            <div className="mt-1 space-y-1">
-
-              {question.options.map((option, oi) => (
-
-                <label key={oi} className="flex items-start gap-2 text-sm text-slate-700">
-
-                  <input
-
-                    type="radio"
-
-                    name={`quiz-${attempt.id}-q${qi}`}
-
-                    checked={answers[qi] === oi}
-
-                    onChange={() =>
-
-                      setAnswers((current) => current.map((a, i) => (i === qi ? oi : a)))
-
-                    }
-
-                    className="mt-1"
-
-                  />
-
-                  <span>{option}</span>
-
-                </label>
-
-              ))}
-
+            <div className="mt-3 space-y-2">
+              {question.options.map((option, oi) => {
+                const isSelected = answers[qi] === oi;
+                return (
+                  <label
+                    key={oi}
+                    className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors ${
+                      isSelected
+                        ? "border-primary-300 bg-primary-50"
+                        : "border-neutral-200 bg-neutral-50 hover:border-neutral-300 hover:bg-white"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name={`quiz-${attempt.id}-q${qi}`}
+                      checked={isSelected}
+                      onChange={() =>
+                        setAnswers((current) => current.map((a, i) => (i === qi ? oi : a)))
+                      }
+                      className="mt-0.5 shrink-0 accent-primary-600"
+                    />
+                    <span className={`text-sm ${isSelected ? "text-primary-800 font-medium" : "text-neutral-700"}`}>
+                      {option}
+                    </span>
+                  </label>
+                );
+              })}
             </div>
 
             <QuizSourceLine text={question.source_citation} />
-
           </fieldset>
-
         ))}
 
+        <div className="px-4 py-3 space-y-2">
+          {error ? (
+            <p role="alert" className="lms-alert lms-alert-error text-xs">
+              {error}
+            </p>
+          ) : null}
 
+          {!allAnswered ? (
+            <p className="text-xs text-neutral-400">
+              Answer all {attempt.questions.length} questions to submit.
+            </p>
+          ) : null}
 
-        {error ? <FormError>{error}</FormError> : null}
-
-
-
-        {!allAnswered ? (
-
-          <p className="text-xs text-slate-500">
-
-            Answer all {attempt.questions.length} questions to submit.
-
-          </p>
-
-        ) : null}
-
-
-
-        <button
-
-          type="submit"
-
-          disabled={!allAnswered || pending}
-
-          className="w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-
-        >
-
-          {pending ? "Submitting..." : "Submit answers"}
-
-        </button>
-
+          <button
+            type="submit"
+            disabled={!allAnswered || pending}
+            className="lms-btn-primary w-full"
+          >
+            {pending ? "Submitting..." : "Submit answers"}
+          </button>
+        </div>
       </form>
-
     </section>
-
   );
-
 }
 
-
-
-/** A submitted quiz, rendered exactly from `QuizResultOut`. Used in chat and in quiz history. */
+// ── Quiz result view ──────────────────────────────────────────────────────────
 
 export function QuizResultView({
-
   result,
-
   footer,
-
 }: {
-
   result: QuizResultOut;
-
   footer?: ReactNode;
-
 }) {
-
   return (
-
     <section
-
-      className="rounded-lg border border-slate-200 bg-white px-4 py-3"
-
+      className="rounded-xl border border-neutral-200 bg-white shadow-sm"
       aria-label="Practice quiz result"
-
     >
+      {/* Score header */}
+      <div className="border-b border-neutral-100 px-4 py-3">
+        <h3 className="text-sm font-semibold text-neutral-900">Quiz result</h3>
+        <p className="mt-0.5 text-xs text-neutral-500">
+          {describeScope(result.scope_type, result.scope_detail)}
+        </p>
+      </div>
 
-      <h3 className="text-sm font-semibold text-slate-900">Practice quiz result</h3>
+      {/* Score block */}
+      <div className="px-4 pt-4 pb-3 border-b border-neutral-100">
+        <p
+          className="text-2xl font-bold text-neutral-900"
+          data-testid="quiz-score"
+        >
+          {result.score} / {result.max_score}
+        </p>
+        <p className="mt-0.5 text-sm text-neutral-600">{result.score_label}</p>
+        <div className="mt-3">
+          <PracticeLabel notice={result.notice} />
+        </div>
+      </div>
 
-      <p className="mb-2 text-xs text-slate-500">
+      {/* Per-question breakdown */}
+      <ol className="divide-y divide-neutral-100">
+        {result.questions.map((question, qi) => {
+          const isCorrect = question.is_correct;
+          return (
+            <li key={qi} className="px-4 py-4">
+              <p className="text-sm font-medium text-neutral-900 leading-snug">
+                <span className="text-neutral-400 mr-1">{qi + 1}.</span>
+                {question.question}{" "}
+                <span
+                  className={`inline-block rounded px-1.5 py-0.5 text-xs font-semibold ${
+                    isCorrect
+                      ? "bg-success-50 text-success-700"
+                      : "bg-danger-50 text-danger-700"
+                  }`}
+                >
+                  {isCorrect ? "Correct" : "Incorrect"}
+                </span>
+              </p>
 
-        {describeScope(result.scope_type, result.scope_detail)}
+              <ul className="mt-2 space-y-1.5">
+                {question.options.map((option, oi) => {
+                  const isCorrectOption = oi === question.correct_option_index;
+                  const isChosen = oi === question.student_answer_index;
+                  const isWrongChoice = isChosen && !isCorrectOption;
 
-      </p>
+                  return (
+                    <li
+                      key={oi}
+                      className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
+                        isCorrectOption
+                          ? "border-success-200 bg-success-50 text-success-700 font-medium"
+                          : isWrongChoice
+                          ? "border-danger-200 bg-danger-50 text-danger-700"
+                          : "border-neutral-100 bg-neutral-50 text-neutral-600"
+                      }`}
+                    >
+                      <span className="shrink-0 text-xs mt-0.5 w-4">
+                        {isCorrectOption ? "✓" : isWrongChoice ? "✗" : " "}
+                      </span>
+                      <span className="flex-1">{option}</span>
+                      {isChosen && !isCorrectOption ? (
+                        <span className="shrink-0 text-xs text-danger-600">your answer</span>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
 
-
-
-      <p className="text-lg font-semibold text-slate-900" data-testid="quiz-score">
-
-        {result.score} / {result.max_score}
-
-      </p>
-
-      <p className="mb-2 text-sm text-slate-700">{result.score_label}</p>
-
-      {result.not_a_real_grade === true ? (
-
-        <p className="mb-2 text-xs text-slate-500">Recorded by the server as not a real grade.</p>
-
-      ) : null}
-
-      <PracticeLabel notice={result.notice} />
-
-
-
-      <ol className="mt-3 space-y-3">
-
-        {result.questions.map((question, qi) => (
-
-          <li key={qi}>
-
-            <p className="text-sm font-medium text-slate-900">
-
-              {qi + 1}. {question.question}{" "}
-
-              <span className={question.is_correct ? "text-emerald-700" : "text-red-700"}>
-
-                {question.is_correct ? "Correct" : "Incorrect"}
-
-              </span>
-
-            </p>
-
-            <ul className="mt-1 space-y-0.5">
-
-              {question.options.map((option, oi) => {
-
-                const isCorrect = oi === question.correct_option_index;
-
-                const isChosen = oi === question.student_answer_index;
-
-                return (
-
-                  <li
-
-                    key={oi}
-
-                    className={`text-sm ${isCorrect ? "font-medium text-emerald-800" : "text-slate-700"}`}
-
-                  >
-
-                    {option}
-
-                    {isChosen ? <span className="ml-2 text-xs text-slate-500">(your answer)</span> : null}
-
-                    {isCorrect ? (
-
-                      <span className="ml-2 text-xs text-emerald-700">(correct answer)</span>
-
-                    ) : null}
-
-                  </li>
-
-                );
-
-              })}
-
-            </ul>
-
-            <QuizSourceLine text={question.source_citation} />
-
-          </li>
-
-        ))}
-
+              <QuizSourceLine text={question.source_citation} />
+            </li>
+          );
+        })}
       </ol>
 
-
-
-      {footer ? <div className="mt-3 text-xs text-slate-500">{footer}</div> : null}
-
+      {footer ? (
+        <div className="border-t border-neutral-100 px-4 py-3 text-xs text-neutral-400">
+          {footer}
+        </div>
+      ) : null}
     </section>
-
   );
-
 }
-
