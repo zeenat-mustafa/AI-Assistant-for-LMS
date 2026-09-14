@@ -76,7 +76,7 @@ export function GradeFileRow({
               expanded ? "rotate-90" : ""
             }`}
           >
-            ›
+            &gt;
           </span>
           <span className={nameClass}>{grade.original_filename}</span>
         </span>

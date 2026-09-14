@@ -207,8 +207,8 @@ function ChatPanel({ onClose }: { onClose: () => void }) {
           aria-label="Close grading chat"
           className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
         >
-          <span aria-hidden className="text-lg leading-none">
-            ✕
+          <span aria-hidden className="text-lg leading-none font-bold">
+            x
           </span>
         </button>
       </header>
@@ -279,7 +279,7 @@ function TurnView({ turn }: { turn: Turn }) {
         ) : null}
 
         {turn.streaming && !turn.outcome ? (
-          <p className="mt-1 text-xs text-slate-500">Working…</p>
+          <p className="mt-1 text-xs text-slate-500">Working...</p>
         ) : null}
 
         {turn.summary ? (
@@ -288,7 +288,7 @@ function TurnView({ turn }: { turn: Turn }) {
               {safeChatText(turn.summary.message, "summary message")}
             </p>
             <p className="mt-1 text-xs text-slate-500">
-              {turn.summary.graded} graded · {turn.summary.failed} failed ·{" "}
+              {turn.summary.graded} graded, {turn.summary.failed} failed,{" "}
               {turn.summary.total} total
             </p>
             {turn.summary.failures.length > 0 ? (
@@ -316,15 +316,15 @@ function EventLine({ event }: { event: GradingEvent }) {
   if (event.event === "checking") {
     return (
       <>
-        <span aria-hidden>⏳</span> Checking <strong>{event.filename}</strong> for{" "}
-        {event.student_name}…
+        <span aria-hidden>Checking</span> <strong>{event.filename}</strong> for{" "}
+        {event.student_name}...
       </>
     );
   }
   if (event.event === "graded") {
     return (
       <>
-        <span aria-hidden>✓</span> Graded <strong>{event.filename}</strong> for{" "}
+        <span>Success: </span> Graded <strong>{event.filename}</strong> for{" "}
         {event.student_name} — {event.score} / 10
       </>
     );
@@ -332,7 +332,7 @@ function EventLine({ event }: { event: GradingEvent }) {
   if (event.event === "failed") {
     return (
       <span className="text-red-700">
-        <span aria-hidden>✕</span> Failed <strong>{event.filename}</strong> for{" "}
+        <span>Error: </span> Failed <strong>{event.filename}</strong> for{" "}
         {event.student_name} —{" "}
         {safeChatText(
           event.error,

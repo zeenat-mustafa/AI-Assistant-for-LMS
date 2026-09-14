@@ -43,6 +43,7 @@ import type {
 } from "@/lib/api";
 import { MyGradesPanel } from "./my-grades-panel";
 import { SubmissionUploadPanel } from "./submission-upload-panel";
+import { LectureFilesPanel } from "@/components/lecture-files-panel";
 import { RequireAuth } from "@/components/require-auth";
 import { SignedInShell } from "@/components/signed-in-shell";
 import {
@@ -245,6 +246,8 @@ function StudentSessionBody({ sessionId }: { sessionId: number }) {
         sessionId={sessionId}
         uploads={session.assignment_uploads}
       />
+
+      <LectureFilesPanel sessionId={sessionId} canUpload={false} />
     </div>
   );
 }
@@ -252,7 +255,7 @@ function StudentSessionBody({ sessionId }: { sessionId: number }) {
 function BackLink() {
   return (
     <Link href="/student" className="text-sm text-slate-500 underline">
-      ← All sessions
+      Back to all sessions
     </Link>
   );
 }
@@ -346,9 +349,9 @@ function SubmissionStatusPanel({
         <div>
           <p className="text-xs text-slate-500">
             {submission.uploads.length}{" "}
-            {submission.uploads.length === 1 ? "upload" : "uploads"} ·{" "}
+            {submission.uploads.length === 1 ? "upload" : "uploads"},{" "}
             {submission.files.length}{" "}
-            {submission.files.length === 1 ? "notebook" : "notebooks"} ·{" "}
+            {submission.files.length === 1 ? "notebook" : "notebooks"},{" "}
             {submission.files.filter((f) => f.graded).length} graded
           </p>
 
@@ -367,7 +370,7 @@ function SubmissionStatusPanel({
                       <span className="block text-xs text-slate-500">
                         Uploaded {formatDate(upload.uploaded_at)}
                         {producedFiles.length > 0
-                          ? ` · ${producedFiles.length} ${producedFiles.length === 1 ? "notebook" : "notebooks"} (${producedFiles.filter((f) => f.graded).length} graded)`
+                          ? `, ${producedFiles.length} ${producedFiles.length === 1 ? "notebook" : "notebooks"} (${producedFiles.filter((f) => f.graded).length} graded)`
                           : ""}
                       </span>
                     </span>
@@ -376,14 +379,14 @@ function SubmissionStatusPanel({
                         onClick={() => void handleDownload(upload)}
                         disabled={downloadBusyId === upload.id}
                       >
-                        {downloadBusyId === upload.id ? "Downloading…" : "Download"}
+                        {downloadBusyId === upload.id ? "Downloading..." : "Download"}
                       </SmallButton>
                       <SmallButton
                         tone="danger"
                         onClick={() => void handleDelete(upload.id, false)}
                         disabled={busyId === upload.id}
                       >
-                        {busyId === upload.id ? "Removing…" : "Remove"}
+                        {busyId === upload.id ? "Removing..." : "Remove"}
                       </SmallButton>
                     </span>
                   </div>

@@ -413,3 +413,230 @@ export function isChatEarlyExit(e: ChatStreamEvent): e is ChatEarlyExit {
 export function isGradingEvent(e: ChatStreamEvent): e is GradingEvent {
   return "event" in e;
 }
+
+// -- Lecture files (backend/app/schemas/lecture_file.py) — Phase 7.1 ----------
+
+/**
+ * `LectureFileRead` -- one uploaded .pptx. These eight fields are ALL the
+ * backend returns: no size, slide count, chunk count, or embedding state.
+ * Extraction runs synchronously inside the upload request, so a row is never
+ * "processing" -- `extracted: false` means it genuinely failed, with the real
+ * reason in `extraction_error`.
+ */
+export interface LectureFileRead {
+  id: number;
+  session_id: number;
+  instructor_id: number | null;
+  original_filename: string;
+  content_type: string | null;
+  extracted: boolean;
+  extraction_error: string | null;
+  uploaded_at: string;
+}
+
+// -- Student chat (backend/app/routers/student_chat.py) — Phase 7.5 ----------
+
+/** Body for POST /student-chat/stream (`StudentChatQuestion`). */
+export interface StudentChatQuestion {
+  question: string;
+  current_session_id: number | null;
+}
+
+/** One entry of `clarification_needed.candidates` (chat_session_resolver.py). */
+export interface ClarificationCandidate {
+  session_id: number;
+  session_title: string;
+  best_similarity: number;
+}
+
+export type StudentChatResolution = "current_session" | "redirected" | "broad_search";
+
+/**
+ * Fields shared by every citation (`_build_citations`). The router reads them
+ * with `chunk.get(...)`, so any of them may arrive null.
+ *
+ * `snippet` is the first 200 characters of the chunk only -- never the full
+ * text. These are the chunks GIVEN to the model, not proof of what the answer
+ * actually used.
+ */
+interface CitationBase {
+  source_file_id: number | null;
+  session_id: number | null;
+  similarity: number | null;
+  snippet: string;
+  filename: string | null;
+}
+
+export interface LectureCitation extends CitationBase {
+  source_type: "lecture";
+  slide_number: number | null;
+  /** `ChunkSource` -- "slide_text" | "notes" (which part of the slide), not a filename. */
+  source: string | null;
+}
+
+export interface NotebookCitation extends CitationBase {
+  source_type: "notebook";
+  /** 0-indexed position in the notebook's `cells` array. */
+  cell_index: number | null;
+  cell_type: string | null;
+}
+
+export type Citation = LectureCitation | NotebookCitation;
+
+export interface StudentChatClarificationEvent {
+  event: "clarification_needed";
+  message: string;
+  candidates: ClarificationCandidate[];
+}
+
+export interface StudentChatResolvedEvent {
+  event: "resolved";
+  session_id: number;
+  session_title: string;
+  resolution: StudentChatResolution;
+}
+
+export interface StudentChatCitationsEvent {
+  event: "citations";
+  citations: Citation[];
+}
+
+export interface StudentChatTokenEvent {
+  event: "token";
+  text: string;
+}
+
+export interface StudentChatDoneEvent {
+  event: "done";
+  thread_id: number;
+  user_message_id: number;
+  assistant_message_id: number;
+}
+
+/** A clean, generic message -- never a raw provider error. */
+export interface StudentChatErrorEvent {
+  event: "error";
+  message: string;
+}
+
+export type StudentChatEvent =
+  | StudentChatClarificationEvent
+  | StudentChatResolvedEvent
+  | StudentChatCitationsEvent
+  | StudentChatTokenEvent
+  | StudentChatDoneEvent
+  | StudentChatErrorEvent;
+
+// -- Practice quizzes (backend/app/schemas/quiz.py) — Phase 7.6 --------------
+
+/**
+ * Body for POST /quiz/generate (`QuizGenerateRequest`). A discriminated union
+ * so exactly one scope field is expressible per `scope_type` -- the `?: never`
+ * members make an extra field a compile error, not a backend 422.
+ * ("uploaded_file" is multipart and has its own endpoint.)
+ */
+export type QuizGenerateRequest =
+  | {
+      scope_type: "assignment_file";
+      unsolved_file_id: number;
+      session_id?: never;
+      session_ids?: never;
+      topic_text?: never;
+    }
+  | {
+      scope_type: "session";
+      session_id: number;
+      unsolved_file_id?: never;
+      session_ids?: never;
+      topic_text?: never;
+    }
+  | {
+      scope_type: "multiple_sessions";
+      session_ids: number[];
+      unsolved_file_id?: never;
+      session_id?: never;
+      topic_text?: never;
+    }
+  | {
+      scope_type: "topic";
+      topic_text: string;
+      unsolved_file_id?: never;
+      session_id?: never;
+      session_ids?: never;
+    };
+
+/**
+ * `scope_detail` is `dict[str, Any]` on the backend (e.g. `{session_id: 5}` or
+ * `{original_filename, file_type}`), so it stays untyped rather than guessed.
+ */
+export type QuizScopeDetail = Record<string, unknown>;
+
+/**
+ * `QuizQuestionOut` -- a question BEFORE submission. Deliberately has no
+ * correct answer; do not add one. `source_citation` is a server-built display
+ * string (notebook cells are 1-indexed in it, unlike chat citations).
+ */
+export interface QuizQuestionOut {
+  question: string;
+  options: string[];
+  source_citation: string;
+}
+
+/** `QuizAttemptOut` -- returned by generate, and by GET /quiz/{id} before submit. */
+export interface QuizAttemptOut {
+  id: number;
+  scope_type: string;
+  scope_detail: QuizScopeDetail;
+  questions: QuizQuestionOut[];
+  max_score: number;
+  submitted: boolean;
+  created_at: string;
+  notice: string;
+}
+
+/** `QuizQuestionResultOut` -- only ever returned after submission. No explanation text exists. */
+export interface QuizQuestionResultOut extends QuizQuestionOut {
+  correct_option_index: number;
+  student_answer_index: number;
+  is_correct: boolean;
+}
+
+/** `QuizResultOut` -- returned by submit, and by GET /quiz/{id} after submit. */
+export interface QuizResultOut {
+  attempt_id: number;
+  scope_type: string;
+  scope_detail: QuizScopeDetail;
+  score: number;
+  max_score: number;
+  score_label: string;
+  not_a_real_grade: true;
+  notice: string;
+  questions: QuizQuestionResultOut[];
+  created_at: string;
+  submitted_at: string;
+}
+
+/** `QuizHistoryItem` -- one SUBMITTED attempt. */
+export interface QuizHistoryItem {
+  attempt_id: number;
+  scope_type: string;
+  scope_detail: QuizScopeDetail;
+  score: number;
+  max_score: number;
+  score_label: string;
+  not_a_real_grade: true;
+  created_at: string;
+  submitted_at: string;
+}
+
+/** `QuizHistoryOut` -- unsubmitted attempts are deliberately excluded by the backend. */
+export interface QuizHistoryOut {
+  attempts: QuizHistoryItem[];
+  not_a_real_grade: true;
+  notice: string;
+}
+
+/** Narrowing helper for GET /quiz/{id}, which returns either shape. */
+export function isQuizResult(value: QuizAttemptOut | QuizResultOut): value is QuizResultOut {
+  return "attempt_id" in value;
+}

@@ -53,6 +53,7 @@ import type {
   SubmissionRead,
 } from "@/lib/api";
 import { GradesRoster } from "./grades-roster";
+import { LectureFilesPanel } from "@/components/lecture-files-panel";
 import { RequireAuth } from "@/components/require-auth";
 import { SignedInShell } from "@/components/signed-in-shell";
 import { summaryNamesSession, useGradingAnnouncements } from "@/lib/grading-announcements";
@@ -244,6 +245,8 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
         onDeleted={refreshUploads}
       />
 
+      <LectureFilesPanel sessionId={sessionId} canUpload />
+
       {/*
         Notebooks extracted internally, not the uploads list -- resources are
         never graded and must not inflate the denominator of the combined
@@ -264,7 +267,7 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
 function BackLink() {
   return (
     <Link href="/instructor" className="text-sm text-slate-500 underline">
-      ← All sessions
+      Back to all sessions
     </Link>
   );
 }

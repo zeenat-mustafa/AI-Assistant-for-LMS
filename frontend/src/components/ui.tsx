@@ -167,7 +167,7 @@ export function FileRoleBadge({ role }: { role: "notebook" | "resource" }) {
           : "shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200 ring-inset"
       }
     >
-      {isNotebook ? "Gradeable notebook" : "Resource · not graded"}
+      {isNotebook ? "Gradeable notebook" : "Resource - not graded"}
     </span>
   );
 }

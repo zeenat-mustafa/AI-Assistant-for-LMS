@@ -302,8 +302,8 @@ function SessionList({
                     {session.title}
                   </span>
                   <span className="block text-xs text-slate-500">
-                    {session.instructor_name ? `${session.instructor_name} · ` : ""}
-                    Created {formatDate(session.created_at)} ·{" "}
+                    {session.instructor_name ? `${session.instructor_name} - ` : ""}
+                    Created {formatDate(session.created_at)} -{" "}
                     {session.unsolved_files.length}{" "}
                     {session.unsolved_files.length === 1 ? "file" : "files"}
                   </span>
@@ -314,7 +314,7 @@ function SessionList({
                 {isRenaming ? (
                   <>
                     <SmallButton onClick={() => saveRename(session)} disabled={renamePending}>
-                      {renamePending ? "Saving…" : "Save"}
+                      {renamePending ? "Saving..." : "Save"}
                     </SmallButton>
                     <SmallButton onClick={cancelRename} disabled={renamePending}>
                       Cancel

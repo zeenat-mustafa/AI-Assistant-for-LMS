@@ -92,13 +92,13 @@ export function StudentDashboard() {
                         {session.title}
                       </span>
                       <span className="block text-xs text-slate-500">
-                        Created {formatDate(session.created_at)} ·{" "}
+                        Created {formatDate(session.created_at)} -{" "}
                         {session.unsolved_files.length}{" "}
                         {session.unsolved_files.length === 1 ? "file" : "files"}
                       </span>
                     </span>
-                    <span aria-hidden className="text-slate-400">
-                      →
+                    <span className="text-xs text-indigo-600 font-medium">
+                      View
                     </span>
                   </Link>
                 </li>
