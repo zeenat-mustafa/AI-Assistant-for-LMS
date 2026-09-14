@@ -38,7 +38,6 @@ import type {
   StudentChatResolvedEvent,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth/auth-context";
-import { CitationList } from "@/components/citation-list";
 import { QuizCard } from "@/components/quiz-views";
 import { QuizHistory } from "@/app/student/quizzes/quiz-history";
 import { SmallButton, Loading, FormError } from "@/components/ui";
@@ -510,8 +509,9 @@ function ChatTurnView({
             </p>
           ) : null}
 
-          {/* Citations — muted, below the answer */}
-          {entry.citations ? <CitationList citations={entry.citations} /> : null}
+          {/* Citations are tracked in state but not displayed in the widget —
+              the notebook/slide references add clutter without adding clarity
+              for most students. */}
         </div>
       </div>
     </div>

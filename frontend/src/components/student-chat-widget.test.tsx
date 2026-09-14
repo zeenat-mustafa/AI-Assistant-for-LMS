@@ -203,10 +203,9 @@ describe("<StudentChatWidget /> — streaming & interaction", () => {
       expect(screen.getByTestId("student-user-message")).toHaveTextContent("What is a DataFrame?");
       expect(screen.getByTestId("student-assistant-message")).toHaveTextContent("Pandas DataFrames are tabular.");
     });
-    expect(screen.getByText("pandas.ipynb")).toBeInTheDocument();
-    expect(screen.getByText(/Cell 2/)).toBeInTheDocument();
-    expect(screen.getByText("lecture2.pptx")).toBeInTheDocument();
-    expect(screen.getByText(/Slide 4/)).toBeInTheDocument();
+    // Citations are tracked in state but not rendered in the widget UI.
+    expect(screen.queryByText("pandas.ipynb")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cell 2/)).not.toBeInTheDocument();
   });
 
   it("shows redirect banner when resolved to a different session from current URL", async () => {
