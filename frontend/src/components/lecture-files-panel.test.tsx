@@ -65,7 +65,6 @@ describe("<LectureFilesPanel /> — list states", () => {
     await renderInstructor();
     const names = (await screen.findAllByText(/\.pptx$/)).map((el) => el.textContent);
     expect(names).toEqual(["b.pptx", "a.pptx"]);
-    expect(screen.getAllByText(/presentationml\.presentation/)).toHaveLength(1);
   });
 
   it("surfaces a load failure", async () => {

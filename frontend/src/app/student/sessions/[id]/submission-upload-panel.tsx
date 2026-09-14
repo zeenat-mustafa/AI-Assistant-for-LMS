@@ -82,9 +82,6 @@ export function SubmissionUploadPanel({
       <h2 className="text-base font-semibold text-neutral-900">
         {hasSubmission ? "Add another file" : "Upload your submission"}
       </h2>
-      <p className="mt-1 mb-4 text-sm text-neutral-500">
-        Any file type, single or inside a .zip. Each upload adds to your submission.
-      </p>
 
       {error ? <FormError>{error}</FormError> : null}
       {notice ? <FormNotice>{notice}</FormNotice> : null}

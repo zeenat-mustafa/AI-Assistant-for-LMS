@@ -84,10 +84,6 @@ export function StudentDashboard() {
               upload your solution, and view your grades.
             </p>
           </div>
-          <p className="text-xs text-neutral-400">
-            There is no enrolment in this system yet — all sessions are shown,
-            not only the ones assigned to you.
-          </p>
           <SessionShellEmpty label="No session selected" />
         </div>
       )}

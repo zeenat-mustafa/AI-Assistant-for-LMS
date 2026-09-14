@@ -204,7 +204,6 @@ function LectureList({
                 </span>
                 <span className="block text-xs text-neutral-400">
                   Uploaded {formatDate(lecture.uploaded_at)}
-                  {lecture.content_type ? ` - ${lecture.content_type}` : ""}
                 </span>
               </span>
               <SmallButton
