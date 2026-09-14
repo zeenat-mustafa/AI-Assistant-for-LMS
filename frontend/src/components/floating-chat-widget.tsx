@@ -195,9 +195,6 @@ function ChatPanel({ onClose }: { onClose: () => void }) {
       <header className="flex shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold text-neutral-900">Grading chat</h2>
-          <p className="text-xs text-neutral-500">
-            Ask me to grade a session, e.g. &ldquo;grade Week 3 Day 1&rdquo;.
-          </p>
         </div>
         <button
           type="button"
