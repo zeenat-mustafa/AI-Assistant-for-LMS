@@ -432,10 +432,31 @@ class TestCitationSuppression:
         fakes["retrieved"] = []
         events = _events(client.post(URL, json={"question": "q"}, headers=student_headers))
         assert not any(e["event"] == "citations" for e in events)
-        # Short-circuit canned message is sent instead.
+        # Short-circuit canned message is sent instead (no prior history).
         token_texts = [e["text"] for e in events if e["event"] == "token"]
         assert len(token_texts) == 1
         assert "couldn't find" in token_texts[0]
+
+    def test_follow_up_with_history_bypasses_short_circuit(self, client, student_headers, fakes, db):
+        """When history exists, empty retrieval must NOT trigger the canned message —
+        the LLM should answer using conversation context ("tell me more" pattern)."""
+        # First turn: retrieved = real chunks → LLM answers, thread + messages persisted.
+        first = _events(client.post(URL, json={"question": "tell me about ragas"}, headers=student_headers))
+        assert any(e["event"] == "token" for e in first)
+        assert "couldn't find" not in " ".join(e.get("text", "") for e in first)
+
+        # Second turn: retrieval returns nothing for the vague follow-up.
+        fakes["retrieved"] = []
+        second = _events(client.post(URL, json={"question": "tell me more"}, headers=student_headers))
+
+        # Must NOT hit the short-circuit — the LLM was called (fake_stream ran).
+        assert len(fakes["prompts"]) == 2, "LLM must be called on the follow-up turn"
+        # The canned "couldn't find" message must NOT appear.
+        all_token_text = " ".join(e.get("text", "") for e in second if e["event"] == "token")
+        assert "couldn't find" not in all_token_text
+        # Conversation history from turn 1 is present in the second prompt.
+        second_prompt = fakes["prompts"][1][0]
+        assert "tell me about ragas" in second_prompt
 
     def test_citations_present_when_material_retrieved(self, client, student_headers, fakes, db):
         # Default fakes has two chunks — citations must still appear.

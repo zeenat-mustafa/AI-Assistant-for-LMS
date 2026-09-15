@@ -183,11 +183,15 @@ def student_chat_stream(
             yield _sse({"event": "citations", "citations": _build_citations(db, retrieved)})
 
         # ── Short-circuit: nothing retrieved above the similarity threshold ──
-        # Skip the LLM call entirely — there is no course material to reason
-        # about, and a full generation would just produce a slower version of
-        # this same message. The exchange is still persisted so follow-up
-        # questions ("can you try a different way?") have memory context.
-        if not retrieved:
+        # Only skip to the canned message when there is also no conversation
+        # history.  If history exists, proceed to the full LLM call — the
+        # model can answer follow-ups ("tell me more", "go deeper") using
+        # context alone, even when the current turn's retrieval is weak.
+        has_history = context is not None and (
+            context.get("rolling_summary") is not None
+            or bool(context.get("recent_messages"))
+        )
+        if not retrieved and not has_history:
             no_material_answer = (
                 "I couldn't find anything about that in your course material. "
                 "Try rephrasing, or ask about a specific topic from your lectures or assignments."
