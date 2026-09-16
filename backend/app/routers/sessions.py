@@ -10,6 +10,7 @@ DELETE /sessions/{session_id}                 → delete session + all stored fi
 POST   /sessions/{session_id}/grade           → grade all ungraded submissions in a session (instructor only)
 """
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -27,6 +28,7 @@ from app.schemas.lecture_file import LectureFileRead
 from app.services.auth import get_current_user, require_instructor
 from app.services.storage import delete_session_storage
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
@@ -177,10 +179,94 @@ def delete_session(
     db: Annotated[Session, Depends(get_db)],
     _instructor: Annotated[User, Depends(require_instructor)],
 ) -> None:
+    """
+    Delete a session and fully clean up all related data:
+      - DB rows (cascaded via SQLAlchemy relationships)
+      - Quiz attempts (manual cleanup since session_id is in JSON, not a FK)
+      - Disk files (storage/sessions/{session_id}/)
+      - Chroma vector embeddings (queried by session_id metadata, not reconstructed from files)
+    """
+    from app.models.quiz_attempt import QuizAttempt
+    from app.services.embeddings import get_chroma_collection
+    import json
+
     session = _get_session_or_404(session_id, db)
+
+    # ── 1. Query Chroma for ALL chunks with this session_id ──────────────────
+    # Don't reconstruct chunk IDs from files/DB rows — query Chroma directly
+    # by metadata, which is more reliable (files may be corrupt/missing, DB
+    # rows may have embedded=True but the vector could have been manually
+    # deleted, etc.). Chroma's where filter will find everything that actually
+    # exists in the collection for this session.
+    chunk_ids_to_delete = []
+    try:
+        collection = get_chroma_collection()
+        # Query with where filter, requesting a very large n_results to get everything
+        results = collection.get(
+            where={"session_id": session_id},
+            include=["metadatas"],  # We only need the IDs, not documents/embeddings
+        )
+        chunk_ids_to_delete = results.get("ids", [])
+        if chunk_ids_to_delete:
+            logger.info(
+                "Found %d Chroma chunks to delete for session %d",
+                len(chunk_ids_to_delete),
+                session_id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to query Chroma chunks for session %d: %s (will proceed with deletion anyway)",
+            session_id,
+            exc,
+        )
+
+    # ── 2. Delete quiz attempts scoped to this session ───────────────────────
+    # Quiz attempts store session_id inside JSON scope_detail, not as a FK,
+    # so they don't cascade. We need to find and delete them manually.
+    quiz_attempts = db.query(QuizAttempt).filter(QuizAttempt.student_id.isnot(None)).all()
+    session_quiz_attempts = []
+    for attempt in quiz_attempts:
+        try:
+            scope_detail = json.loads(attempt.scope_detail)
+            # Check all possible session_id locations in scope_detail
+            if (
+                scope_detail.get("session_id") == session_id
+                or session_id in scope_detail.get("session_ids", [])
+            ):
+                session_quiz_attempts.append(attempt)
+        except (json.JSONDecodeError, TypeError):
+            # Malformed JSON — skip this attempt
+            continue
+
+    for attempt in session_quiz_attempts:
+        db.delete(attempt)
+
+    # ── 3. Delete the session (cascades to all FK-linked rows) ───────────────
     db.delete(session)
     db.commit()
+
+    # ── 4. Clean up disk files ────────────────────────────────────────────────
     delete_session_storage(session_id)
+
+    # ── 5. Clean up Chroma vectors ────────────────────────────────────────────
+    if chunk_ids_to_delete:
+        try:
+            from app.services.embeddings import delete_chunks
+            delete_chunks(chunk_ids_to_delete)
+            logger.info(
+                "Deleted %d Chroma chunks for session %d",
+                len(chunk_ids_to_delete),
+                session_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Chroma cleanup failure should not prevent session deletion from
+            # completing — the DB rows and disk files are already gone.
+            # Log the error but don't raise (matches embeddings.retrieve convention).
+            logger.warning(
+                "Failed to delete Chroma chunks for session %d: %s",
+                session_id,
+                exc,
+            )
 
 
 # ── Batch session grading ─────────────────────────────────────────────────────
