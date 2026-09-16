@@ -6,7 +6,7 @@
  * user to pick here.
  *
  * A plain client-side submit handler rather than a Server Action: the JWT
- * has to reach `localStorage` in the browser, and a Server Action runs on
+ * has to reach `sessionStorage` in the browser, and a Server Action runs on
  * the Next server where it could neither read nor write that.
  */
 

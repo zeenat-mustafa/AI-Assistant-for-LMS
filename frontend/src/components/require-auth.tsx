@@ -12,7 +12,7 @@
  *
  * `proxy.ts` (Next 16's renamed Middleware) is not usable here either: it
  * runs on the server and can only read cookies, while our JWT lives in
- * localStorage. The docs also limit Proxy to optimistic checks rather than
+ * sessionStorage. The docs also limit Proxy to optimistic checks rather than
  * real authorization.
  *
  * This guard is therefore UX, not security. Enforcement stays where it

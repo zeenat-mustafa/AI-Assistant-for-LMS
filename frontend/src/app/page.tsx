@@ -2,7 +2,7 @@
 
 /**
  * Entry route: sends the visitor wherever their session says they belong.
- * Client-side because the session lives in localStorage (see auth-context).
+ * Client-side because the session lives in sessionStorage (see auth-context).
  */
 
 import { useEffect } from "react";

@@ -5,9 +5,10 @@
  *
  * Why a client context rather than Next's server-side session patterns:
  * the backend is a separate FastAPI service that issues a Bearer JWT, and
- * 5.1 stores that token in `localStorage`. Nothing on the Next server can
- * see it -- not `proxy.ts` (Next 16's renamed Middleware), not Server
- * Components -- so the session has to be resolved in the browser.
+ * it's stored in `sessionStorage` (see lib/api/token-storage.ts). Nothing
+ * on the Next server can see it -- not `proxy.ts` (Next 16's renamed
+ * Middleware), not Server Components -- so the session has to be resolved
+ * in the browser.
  *
  * `status` is deliberately three-valued. Treating "not loaded yet" as
  * "logged out" would bounce an authenticated user to /login on every hard
