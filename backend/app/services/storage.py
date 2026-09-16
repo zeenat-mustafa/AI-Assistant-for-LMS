@@ -13,6 +13,14 @@ Directory layout under storage_root:
                                          uploaded them, one per upload event
             {original_filename}       ← notebooks/resources extracted from
                                          the above, for internal grading use
+        lectures/
+            {original_filename}       ← raw .pptx bytes exactly as uploaded.
+                                         Flat, unlike assignments/ — a lecture
+                                         upload is never a zip, so there is no
+                                         derived-files split on disk; the only
+                                         thing extracted from it is TEXT
+                                         (LectureChunk rows in the DB, not
+                                         files on disk).
         submissions/
             {student_id}/
                 originals/
@@ -28,6 +36,11 @@ Directory layout under storage_root:
                                                  rejection on this side.
                 extracted/            ← .ipynb files unpacked for grading,
                                          from either a direct upload or a zip
+
+Alongside storage_root (storage/sessions/), not nested under it:
+    storage/chroma/    ← Chroma's persistent vector store (Phase 7.2) — one
+                          global collection, not session-scoped, so it sits
+                          beside storage/sessions/ rather than inside it.
 """
 
 import shutil
@@ -68,6 +81,27 @@ def assignment_dir(session_id: int) -> Path:
 def assignment_originals_dir(session_id: int) -> Path:
     """Directory for the raw, unmodified bytes of each assignment upload."""
     p = assignment_dir(session_id) / "originals"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def lecture_dir(session_id: int) -> Path:
+    """Directory for a session's instructor-uploaded lecture files (.pptx)."""
+    p = _storage_root() / str(session_id) / "lectures"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def chroma_dir() -> Path:
+    """
+    Directory for the Chroma persistent vector store (Phase 7.2).
+
+    Sibling of storage_root ("storage/sessions"), not nested under it —
+    Chroma's collection isn't scoped to one session/upload the way
+    assignments/submissions/lectures are, so it lives at storage/chroma/
+    alongside storage/sessions/, both under the same storage/ root.
+    """
+    p = _storage_root().parent / "chroma"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -137,6 +171,18 @@ async def save_original_upload_file(session_id: int, filename: str, data: bytes)
     async with aiofiles.open(dest, "wb") as f:
         await f.write(data)
     logger.info("Saved original assignment upload: %s", dest)
+    return relative_path(dest)
+
+
+async def save_lecture_file(session_id: int, filename: str, data: bytes) -> str:
+    """
+    Persist an instructor-uploaded lecture file's raw .pptx bytes.
+    Returns the relative path stored in the DB.
+    """
+    dest = lecture_dir(session_id) / _safe_filename(filename)
+    async with aiofiles.open(dest, "wb") as f:
+        await f.write(data)
+    logger.info("Saved lecture file: %s", dest)
     return relative_path(dest)
 
 

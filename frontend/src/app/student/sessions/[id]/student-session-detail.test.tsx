@@ -35,10 +35,13 @@ const downloadMySubmissionUploadMock = vi.fn();
 // 5.6 added the grades panel to this page; it must resolve, or its own error
 // banner becomes a second role="alert" and these assertions turn ambiguous.
 const getMyGradesMock = vi.fn();
+// 7.7 added the read-only Lecture files panel; same reason as above.
+const listLecturesMock = vi.fn();
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
+    listLectures: (...a: unknown[]) => listLecturesMock(...a),
     getSession: (...a: unknown[]) => getSessionMock(...a),
     getMySubmission: (...a: unknown[]) => getMySubmissionMock(...a),
     downloadAssignment: (...a: unknown[]) => downloadAssignmentMock(...a),
@@ -135,6 +138,7 @@ beforeEach(() => {
   currentUser = STUDENT;
   getSessionMock.mockResolvedValue(sessionWith([upload()]));
   getMySubmissionMock.mockResolvedValue(null);
+  listLecturesMock.mockResolvedValue([]);
   deleteSubmissionUploadMock.mockResolvedValue(undefined);
   downloadMySubmissionUploadMock.mockResolvedValue(new Blob(["bytes"]));
   getMyGradesMock.mockResolvedValue({
@@ -148,7 +152,7 @@ beforeEach(() => {
 describe("<StudentSessionDetail /> — session and assignment files", () => {
   it("shows the session's real fields", async () => {
     render(<StudentSessionDetail sessionId={3} />);
-    expect(screen.getByText(/loading session/i)).toBeInTheDocument();
+    expect(screen.getByText(/loading session details/i)).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Week 2 Day 1" })).toBeInTheDocument();
     expect(getSessionMock).toHaveBeenCalledWith(3);
   });
@@ -214,6 +218,26 @@ describe("<StudentSessionDetail /> — session and assignment files", () => {
     expect(screen.getByLabelText(/your solved file/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^upload$/i })).toBeInTheDocument();
   });
+
+  it("shows a read-only lecture files panel with no upload control", async () => {
+    listLecturesMock.mockResolvedValue([
+      {
+        id: 4,
+        session_id: 3,
+        instructor_id: 1,
+        original_filename: "Week2_Lecture.pptx",
+        content_type: null,
+        extracted: true,
+        extraction_error: null,
+        uploaded_at: "2026-09-12T10:00:00",
+      },
+    ]);
+    await renderDetail();
+    expect(await screen.findByText("Week2_Lecture.pptx")).toBeInTheDocument();
+    expect(listLecturesMock).toHaveBeenCalledWith(3);
+    expect(screen.queryByLabelText(/lecture file \(\.pptx\)/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /upload lecture/i })).not.toBeInTheDocument();
+  });
 });
 
 describe("<StudentSessionDetail /> — submission status", () => {
@@ -254,7 +278,7 @@ describe("<StudentSessionDetail /> — submission status", () => {
     expect(screen.getByText("bundle.zip")).toBeInTheDocument();
     expect(screen.getByText("extra.ipynb")).toBeInTheDocument();
     // Overall summary line.
-    expect(screen.getByText(/2 uploads · 3 notebooks · 1 graded/)).toBeInTheDocument();
+    expect(screen.getByText(/2 uploads, 3 notebooks, 1 graded/)).toBeInTheDocument();
     // Per-upload notebook breakdown -- bundle.zip produced 2 notebooks, 1 graded.
     expect(screen.getByText(/2 notebooks \(1 graded\)/)).toBeInTheDocument();
     expect(screen.queryByText(/haven't submitted/i)).not.toBeInTheDocument();
@@ -283,7 +307,7 @@ describe("<StudentSessionDetail /> — submission status", () => {
   it("uses singular wording for a one-notebook submission", async () => {
     getMySubmissionMock.mockResolvedValue(submission());
     await renderDetail();
-    expect(screen.getByText(/1 notebook · 1 graded/)).toBeInTheDocument();
+    expect(screen.getByText(/1 notebook, 1 graded/)).toBeInTheDocument();
   });
 });
 

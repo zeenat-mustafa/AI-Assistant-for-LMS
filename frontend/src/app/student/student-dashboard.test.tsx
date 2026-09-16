@@ -1,4 +1,4 @@
-/** Student dashboard: all-sessions scope, states, and the enrolment note. */
+/** Student dashboard: all-sessions scope and states. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
@@ -103,16 +103,6 @@ describe("<StudentDashboard />", () => {
     render(<StudentDashboard />);
     await screen.findByText(/no sessions have been created yet/i);
     expect(listSessionsMock).toHaveBeenCalledWith({ limit: 200 });
-  });
-
-  it("states the enrolment gap on both the empty and populated list", async () => {
-    render(<StudentDashboard />);
-    expect(await screen.findByText(/no enrolment in this system/i)).toBeInTheDocument();
-
-    listSessionsMock.mockResolvedValue({ total: 1, items: [session()] });
-    render(<StudentDashboard />);
-    const notes = await screen.findAllByText(/no enrolment in this system/i);
-    expect(notes.length).toBeGreaterThan(0);
   });
 
   it("surfaces a load failure rather than showing a false empty list", async () => {

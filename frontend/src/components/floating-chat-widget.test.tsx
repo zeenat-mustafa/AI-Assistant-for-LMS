@@ -244,7 +244,7 @@ describe("<FloatingChatWidget /> — the non-graded outcomes are replies, not er
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("lists ambiguous_session candidates with their confidence", async () => {
+  it("lists ambiguous_session candidates without confidence scores", async () => {
     streamChatMock.mockReturnValue(
       streamOf({
         status: "ambiguous_session",
@@ -261,8 +261,8 @@ describe("<FloatingChatWidget /> — the non-graded outcomes are replies, not er
     await userEvent.click(screen.getByRole("button", { name: /^send$/i }));
 
     await waitFor(() => expect(screen.getByText(/Week 1 Day 1/)).toBeInTheDocument());
-    expect(screen.getByText(/100% match/)).toBeInTheDocument();
-    expect(screen.getByText(/82% match/)).toBeInTheDocument();
+    expect(screen.getByText(/Week 1 Day 2/)).toBeInTheDocument();
+    expect(screen.queryByText(/% match/)).not.toBeInTheDocument();
   });
 });
 

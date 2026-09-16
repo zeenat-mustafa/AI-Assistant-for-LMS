@@ -208,12 +208,42 @@ def extract_requirements_text(ipynb_path: Union[str, Path]) -> str:
     return parsed["markdown_text"]
 
 
-def extract_notebook_structure(ipynb_path: str) -> dict:
+IMAGE_PLACEHOLDER = "[image omitted]"
+
+# Base64 payloads may be one very long line or wrapped, so whitespace is
+# allowed anywhere inside the payload.
+_MARKDOWN_DATA_IMAGE = re.compile(
+    r'!\[[^\]]*\]\(\s*data:image/[^;,\s]+;base64,[A-Za-z0-9+/=\s]*(?:"[^"]*"\s*)?\)',
+    re.IGNORECASE,
+)
+_HTML_DATA_IMAGE = re.compile(
+    r"<img\b[^>]*?\bsrc\s*=\s*([\"'])\s*data:image/[^;,\s]+;base64,[A-Za-z0-9+/=\s]*\1[^>]*>",
+    re.IGNORECASE,
+)
+
+
+def strip_embedded_images(text: str) -> str:
+    """Replace every embedded base64 image — markdown ``![..](data:image/..;base64,..)``
+    or HTML ``<img src="data:image/..;base64,..">`` — with IMAGE_PLACEHOLDER.
+
+    Never deletes silently: the placeholder keeps it visible that an image was
+    there. Linked (http/attachment) images and all other text are untouched.
+    """
+    text = _MARKDOWN_DATA_IMAGE.sub(IMAGE_PLACEHOLDER, text)
+    return _HTML_DATA_IMAGE.sub(IMAGE_PLACEHOLDER, text)
+
+
+def extract_notebook_structure(ipynb_path: str, strip_images: bool = False) -> dict:
     """Return ordered notebook cells with a rough, non-authoritative work hint.
 
     ``heuristic_hint`` only highlights cells that often invite a student
     response.  The grading model must still read the entire notebook flow and
     decide what was genuinely supplied versus expected from the student.
+
+    ``strip_images=True`` replaces embedded base64 images in each cell's content
+    with IMAGE_PLACEHOLDER (Phase 7.6). Opt-in on purpose: the RAG embedding
+    pipeline and the practice quiz pass True; grading and rubric generation
+    keep the default so their prompts stay byte-identical.
     """
     result: dict = {"valid": False, "cells": [], "error": None}
     try:
@@ -230,28 +260,68 @@ def extract_notebook_structure(ipynb_path: str) -> dict:
         except UnicodeDecodeError:
             result["error"] = f"File does not appear to be valid UTF-8 text: {ipynb_path}"
             return result
-        try:
-            notebook = nbformat.read(io.StringIO(text), as_version=nbformat.NO_CONVERT)
-        except nbformat.reader.NotJSONError:
-            result["error"] = f"Notebook file contains invalid JSON: {ipynb_path}"
-            return result
-        except Exception as exc:
-            result["error"] = f"nbformat could not parse notebook ({type(exc).__name__}): {exc}"
-            return result
-
-        cells: list[dict] = []
-        for cell in notebook.get("cells", []):
-            cell_type = cell.get("cell_type")
-            if cell_type not in ("markdown", "code"):
-                continue
-            content = cell.get("source", "") or ""
-            hint = _code_completion_hint(content) if cell_type == "code" else _markdown_completion_hint(content)
-            cells.append({"type": cell_type, "content": content, "heuristic_hint": hint})
-        result.update(valid=True, cells=cells, error=None)
+        _fill_structure_from_text(
+            result, text,
+            invalid_json_error=f"Notebook file contains invalid JSON: {ipynb_path}",
+            strip_images=strip_images,
+        )
     except Exception as exc:
         logger.warning("Unexpected error while extracting structure from '%s': %s", ipynb_path, exc, exc_info=True)
         result["error"] = f"Unexpected parse error ({type(exc).__name__}): {exc}"
     return result
+
+
+def extract_notebook_structure_from_bytes(data: bytes, strip_images: bool = False) -> dict:
+    """Same as extract_notebook_structure, for a notebook held only in memory.
+
+    Phase 7.6's one-off quiz upload must never be written to disk by this
+    project's code, so the bytes are decoded and parsed with nbformat.reads —
+    never via a temp file. Same return shape, same never-raises guarantee,
+    same cell/hint parsing core, same opt-in strip_images.
+    """
+    result: dict = {"valid": False, "cells": [], "error": None}
+    try:
+        if not data:
+            result["error"] = "File is empty."
+            return result
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            result["error"] = "File does not appear to be valid UTF-8 text."
+            return result
+        _fill_structure_from_text(
+            result, text, invalid_json_error="Notebook file contains invalid JSON.", strip_images=strip_images,
+        )
+    except Exception as exc:
+        logger.warning("Unexpected error while extracting structure from in-memory notebook: %s", exc, exc_info=True)
+        result["error"] = f"Unexpected parse error ({type(exc).__name__}): {exc}"
+    return result
+
+
+def _fill_structure_from_text(result: dict, text: str, invalid_json_error: str, strip_images: bool = False) -> None:
+    """Parsing core shared by the path- and bytes-based structure extractors:
+    parses notebook JSON text and fills *result* in place (valid/cells/error).
+    Image stripping happens here, once, before the hint is computed."""
+    try:
+        notebook = nbformat.reads(text, as_version=nbformat.NO_CONVERT)
+    except nbformat.reader.NotJSONError:
+        result["error"] = invalid_json_error
+        return
+    except Exception as exc:
+        result["error"] = f"nbformat could not parse notebook ({type(exc).__name__}): {exc}"
+        return
+
+    cells: list[dict] = []
+    for cell in notebook.get("cells", []):
+        cell_type = cell.get("cell_type")
+        if cell_type not in ("markdown", "code"):
+            continue
+        content = cell.get("source", "") or ""
+        if strip_images:
+            content = strip_embedded_images(content)
+        hint = _code_completion_hint(content) if cell_type == "code" else _markdown_completion_hint(content)
+        cells.append({"type": cell_type, "content": content, "heuristic_hint": hint})
+    result.update(valid=True, cells=cells, error=None)
 
 
 def _code_completion_hint(content: str) -> bool:

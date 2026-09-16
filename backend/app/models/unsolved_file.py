@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, Text, ForeignKey, DateTime
+from sqlalchemy import String, Text, Boolean, ForeignKey, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -36,6 +36,14 @@ class UnsolvedFile(Base):
     # Generated rubric stored as JSON (criteria + point breakdown, summing to 10).
     # NULL until the file is graded for the first time; reused for all students after.
     rubric_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # True once every markdown/code cell's instructional content has been
+    # embedded and upserted into Chroma (Phase 7.2). False on failure — the
+    # file row itself always exists regardless, matching LectureFile's
+    # extracted/extraction_error convention.
+    embedded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Real failure reason when embedded=False. NULL when embedded=True or not
+    # yet attempted. Never fabricated.
+    embedding_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

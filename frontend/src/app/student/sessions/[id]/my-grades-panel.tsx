@@ -26,7 +26,7 @@
  */
 
 import type { GradeRead, GradeSummary, SubmissionRead } from "@/lib/api";
-import { EmptyState, FormError, Loading, Panel } from "@/components/ui";
+import { EmptyState, FormError, Loading } from "@/components/ui";
 import { GradeFileRow } from "@/components/grade-file-row";
 
 export function MyGradesPanel({
@@ -46,44 +46,41 @@ export function MyGradesPanel({
   const hasGrades = gradedFiles.length > 0;
 
   return (
-    <Panel title="Your grade">
+    <div className="lms-card">
+      <h2 className="text-base font-semibold text-neutral-900">Your grade</h2>
+
       {error ? <FormError>{error}</FormError> : null}
 
       {grades === undefined && !error ? (
-        <Loading>Loading your grade…</Loading>
+        <div className="mt-4"><Loading>Loading your grade...</Loading></div>
       ) : submission === null ? (
-        <EmptyState>
-          Nothing to grade yet — you haven&apos;t submitted for this session.
-        </EmptyState>
+        <div className="mt-4">
+          <EmptyState>You haven&apos;t submitted for this session yet.</EmptyState>
+        </div>
       ) : !hasGrades ? (
-        // Submitted, but no Grade rows exist. combined_score is 0.0 here and
-        // must not be shown as a score.
-        <EmptyState>
-          Your submission hasn&apos;t been graded yet. Your score and feedback will
-          appear here once your instructor grades it.
-        </EmptyState>
+        <div className="mt-4">
+          <EmptyState>
+            Your submission hasn&apos;t been graded yet. Your score and feedback will
+            appear here once your instructor grades it.
+          </EmptyState>
+        </div>
       ) : (
-        <>
+        <div className="mt-4">
           {totalAssignmentFiles > 1 ? (
-            <div className="mb-4 flex items-baseline justify-between gap-4 border-b border-slate-200 pb-3">
-              <span className="text-sm text-slate-600">
+            <div className="mb-4 flex items-baseline justify-between gap-4 border-b border-neutral-200 pb-3">
+              <span className="text-sm text-neutral-600">
                 Combined score
-                <span className="ml-1 text-xs text-slate-400">
-                  (across all {totalAssignmentFiles} assignment files)
+                <span className="ml-1 text-xs text-neutral-400">
+                  ({totalAssignmentFiles} assignment files)
                 </span>
               </span>
-              <span className="text-lg font-semibold tabular-nums text-slate-900">
+              <span className="text-lg font-semibold tabular-nums text-neutral-900">
                 {grades?.combined_score ?? 0} / 10
               </span>
             </div>
           ) : null}
 
-          {/*
-            The combined score above stays the headline. Per file: a summary
-            paragraph when one exists, or the pre-existing collapsible
-            filename+score breakdown as a fallback for historical grades.
-          */}
-          <ul className="divide-y divide-slate-100">
+          <ul className="divide-y divide-neutral-100">
             {gradedFiles.map((grade) =>
               grade.summary ? (
                 <SummaryOnlyRow key={grade.id} grade={grade} />
@@ -94,15 +91,14 @@ export function MyGradesPanel({
           </ul>
 
           {gradedFiles.length < totalAssignmentFiles ? (
-            <p className="mt-4 border-t border-slate-200 pt-3 text-xs text-slate-500">
-              {gradedFiles.length} of {totalAssignmentFiles} assignment files graded so
-              far. The combined score counts every assignment file in the session, so it
-              will change as the rest are graded.
+            <p className="mt-4 border-t border-neutral-200 pt-3 text-xs text-neutral-500">
+              {gradedFiles.length} of {totalAssignmentFiles} assignment files graded so far.
+              The combined score will update as the remaining files are graded.
             </p>
           ) : null}
-        </>
+        </div>
       )}
-    </Panel>
+    </div>
   );
 }
 
@@ -116,14 +112,14 @@ function SummaryOnlyRow({ grade }: { grade: GradeRead }) {
   return (
     <li className="py-2">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="truncate text-sm font-medium text-slate-900">
+        <span className="truncate text-sm font-medium text-neutral-900">
           {grade.original_filename}
         </span>
-        <span className="shrink-0 text-sm font-medium tabular-nums text-slate-900">
+        <span className="shrink-0 text-sm font-medium tabular-nums text-neutral-900">
           {grade.score} / 10
         </span>
       </div>
-      <p className="mt-1 text-sm text-slate-700">{grade.summary}</p>
+      <p className="mt-1 text-sm text-neutral-700">{grade.summary}</p>
     </li>
   );
 }

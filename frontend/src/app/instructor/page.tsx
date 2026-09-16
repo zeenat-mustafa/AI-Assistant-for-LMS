@@ -8,7 +8,7 @@ import { InstructorDashboard } from "./instructor-dashboard";
 export default function InstructorHomePage() {
   return (
     <RequireAuth role="instructor">
-      <SignedInShell>
+      <SignedInShell fullWidth>
         <InstructorDashboard />
       </SignedInShell>
     </RequireAuth>

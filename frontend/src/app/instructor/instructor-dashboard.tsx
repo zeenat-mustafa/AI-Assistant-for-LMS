@@ -1,32 +1,17 @@
 "use client";
 
 /**
- * Instructor dashboard: create a session, and list every session in the
- * workspace.
+ * Instructor dashboard — Phase 7.8
  *
- * Shared faculty workspace, deliberately (see README): any instructor can
- * see/edit/grade any session regardless of who created it, so this loads
- * every session, not just the current instructor's own. `instructor_name`
- * is shown per session so it's still clear who created what -- informative,
- * not restrictive.
- *
- * Rename and delete controls (bugfix-session-naming-attribution) live here
- * rather than on the session detail page: this dashboard is already the
- * canonical list of every session, so managing one doesn't require
- * navigating into it first. Rename follows an inline edit-in-place pattern
- * (no confirm step -- renaming isn't destructive); delete reuses the same
- * confirm/cancel pattern as the assignment-file Remove button on the
- * session detail page (frontend/src/app/instructor/sessions/[id]/
- * session-detail.tsx's FileListPanel) so the two destructive actions in
- * this app behave identically.
- *
- * Plain `useEffect` + state rather than SWR/TanStack Query. The Next docs
- * recommend those once you need revalidation, polling or request dedup;
- * this page loads one list once, so a data library would be weight without
- * a payoff at this scope.
+ * Two-column layout via SessionShell. The left sidebar contains the full
+ * session list with inline rename/delete controls (same logic as 7.7).
+ * The right pane shows the "Create session" form when nothing is selected,
+ * or a prompt to pick a session. Session detail lives at
+ * /instructor/sessions/[id].
  */
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 import {
@@ -43,24 +28,14 @@ import {
   Field,
   FormError,
   Loading,
-  Panel,
   SmallButton,
   SubmitButton,
 } from "@/components/ui";
+import { SessionShell } from "@/components/session-shell";
+import type { SessionListItem } from "@/components/session-shell";
 
-/**
- * The backend caps `limit` at 200. One page is a real (if generous) limit
- * on total workspace-wide session count, not a narrowing of what any one
- * instructor can see -- see the README note.
- */
 const PAGE_LIMIT = 200;
 
-/**
- * Load every session in the workspace.
- *
- * Returns the outcome instead of setting state, so a stale response can be
- * discarded by the caller.
- */
 export async function loadAllSessions(): Promise<
   { sessions: SessionRead[] } | { error: string }
 > {
@@ -75,18 +50,22 @@ export async function loadAllSessions(): Promise<
 }
 
 export function InstructorDashboard() {
-  // null = still loading; [] = loaded and genuinely empty.
+  const router = useRouter();
   const [sessions, setSessions] = useState<SessionRead[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [title, setTitle] = useState("");
-  const [titleError, setTitleError] = useState<string | undefined>();
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+  // Rename state
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renamePending, setRenamePending] = useState(false);
+
+  // Delete state
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
 
   useEffect(() => {
-    // Guards against a slow response landing after the component has
-    // already unmounted (e.g. navigating away mid-request).
     let cancelled = false;
     void loadAllSessions().then((result) => {
       if (cancelled) return;
@@ -98,114 +77,8 @@ export function InstructorDashboard() {
       setSessions(result.sessions);
       setLoadError(null);
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
-
-  async function handleCreate(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setCreateError(null);
-
-    const trimmed = title.trim();
-    if (!trimmed) {
-      setTitleError("Session title is required.");
-      return;
-    }
-    setTitleError(undefined);
-
-    setPending(true);
-    try {
-      const created = await createSession(trimmed);
-      // Prepend rather than refetch: the backend orders newest-first, so this
-      // matches what a reload would show, without one.
-      setSessions((current) => [created, ...(current ?? [])]);
-      setTitle("");
-    } catch (error) {
-      // e.g. the backend's 409: "A session titled 'X' already exists
-      // (id=N by Instructor Name)." Title uniqueness is global, not
-      // per-instructor -- shared workspace, see README.
-      setCreateError(
-        error instanceof ApiError ? error.detail : "Could not create the session.",
-      );
-    } finally {
-      setPending(false);
-    }
-  }
-
-  return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Sessions</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Shared across every instructor — create a session for each class, then
-          upload its assignment notebooks. Anyone can view, edit, and grade any
-          session here, regardless of who created it.
-        </p>
-      </div>
-
-      <Panel
-        title="Create a session"
-        description="Use the naming your class already uses, e.g. “Week 3 Day 1”."
-      >
-        {createError ? <FormError>{createError}</FormError> : null}
-        <form onSubmit={handleCreate} noValidate>
-          <Field
-            label="Session title"
-            name="title"
-            placeholder="Week 3 Day 1"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            error={titleError}
-          />
-          <SubmitButton pending={pending}>Create session</SubmitButton>
-        </form>
-      </Panel>
-
-      <Panel title="All sessions">
-        {loadError ? <FormError>{loadError}</FormError> : null}
-
-        {sessions === null ? (
-          <Loading>Loading sessions…</Loading>
-        ) : sessions.length === 0 ? (
-          <EmptyState>
-            No sessions yet. Create one above to start uploading assignment files.
-          </EmptyState>
-        ) : (
-          <SessionList
-            sessions={sessions}
-            onRenamed={(updated) =>
-              setSessions((current) =>
-                (current ?? []).map((s) => (s.id === updated.id ? updated : s)),
-              )
-            }
-            onDeleted={(id) =>
-              setSessions((current) => (current ?? []).filter((s) => s.id !== id))
-            }
-          />
-        )}
-      </Panel>
-    </div>
-  );
-}
-
-function SessionList({
-  sessions,
-  onRenamed,
-  onDeleted,
-}: {
-  sessions: SessionRead[];
-  onRenamed: (session: SessionRead) => void;
-  onDeleted: (sessionId: number) => void;
-}) {
-  const [renamingId, setRenamingId] = useState<number | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const [renameError, setRenameError] = useState<string | null>(null);
-  const [renamePending, setRenamePending] = useState(false);
-
-  const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<number | null>(null);
 
   function startRename(session: SessionRead) {
     setRenamingId(session.id);
@@ -220,22 +93,17 @@ function SessionList({
 
   async function saveRename(session: SessionRead) {
     const trimmed = renameValue.trim();
-    if (!trimmed) {
-      setRenameError("Session title is required.");
-      return;
-    }
-    if (trimmed === session.title) {
-      setRenamingId(null);
-      return;
-    }
+    if (!trimmed) { setRenameError("Session title is required."); return; }
+    if (trimmed === session.title) { setRenamingId(null); return; }
     setRenameError(null);
     setRenamePending(true);
     try {
       const updated = await renameSession(session.id, trimmed);
-      onRenamed(updated);
+      setSessions((current) =>
+        (current ?? []).map((s) => (s.id === updated.id ? updated : s)),
+      );
       setRenamingId(null);
     } catch (error) {
-      // e.g. the backend's 409 naming the conflicting session and its owner.
       setRenameError(
         error instanceof ApiError ? error.detail : "Could not rename this session.",
       );
@@ -249,7 +117,7 @@ function SessionList({
     setBusyId(session.id);
     try {
       await deleteSession(session.id);
-      onDeleted(session.id);
+      setSessions((current) => (current ?? []).filter((s) => s.id !== session.id));
       setConfirmingDeleteId(null);
     } catch (error) {
       setDeleteError(
@@ -262,96 +130,179 @@ function SessionList({
     }
   }
 
-  return (
-    <>
-      {deleteError ? <FormError>{deleteError}</FormError> : null}
-      <ul className="divide-y divide-slate-200">
-        {sessions.map((session) => {
-          const isRenaming = renamingId === session.id;
-          const isConfirmingDelete = confirmingDeleteId === session.id;
-          const isBusy = busyId === session.id;
+  const sessionItems: SessionListItem[] = (sessions ?? []).map((s) => ({
+    id: s.id,
+    title: s.title,
+    created_at: s.created_at,
+    file_count: s.unsolved_files.length,
+    meta: s.instructor_name ?? undefined,
+  }));
 
-          return (
-            <li key={session.id} className="flex items-center justify-between gap-4 py-3">
-              {isRenaming ? (
-                <div className="min-w-0 flex-1">
-                  <input
-                    autoFocus
-                    aria-label={`Rename "${session.title}"`}
-                    value={renameValue}
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void saveRename(session);
-                      if (e.key === "Escape") cancelRename();
-                    }}
-                    disabled={renamePending}
-                    className="w-full rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-slate-400 disabled:bg-slate-100"
-                  />
-                  {renameError ? (
-                    <p role="alert" className="mt-1 text-xs text-red-600">
-                      {renameError}
-                    </p>
-                  ) : null}
-                </div>
+  // Build a map for quick lookup when rendering custom rows
+  const sessionMap = new Map((sessions ?? []).map((s) => [s.id, s]));
+
+  function renderItem(item: SessionListItem, isSelected: boolean) {
+    const session = sessionMap.get(item.id);
+    if (!session) return null;
+
+    const isRenaming = renamingId === session.id;
+    const isConfirmingDelete = confirmingDeleteId === session.id;
+    const isBusy = busyId === session.id;
+
+    return (
+      <div
+        className={`px-3 py-2 border-l-2 transition-colors ${
+          isSelected
+            ? "bg-primary-50 border-primary-600"
+            : "border-transparent hover:bg-neutral-100"
+        }`}
+      >
+        {isRenaming ? (
+          <div className="space-y-1">
+            <input
+              autoFocus
+              aria-label={`Rename "${session.title}"`}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void saveRename(session);
+                if (e.key === "Escape") cancelRename();
+              }}
+              disabled={renamePending}
+              className="lms-input text-xs py-1"
+            />
+            {renameError ? (
+              <p role="alert" className="text-xs text-danger-600">{renameError}</p>
+            ) : null}
+            <div className="flex gap-1">
+              <SmallButton onClick={() => void saveRename(session)} disabled={renamePending}>
+                {renamePending ? "Saving..." : "Save"}
+              </SmallButton>
+              <SmallButton onClick={cancelRename} disabled={renamePending}>Cancel</SmallButton>
+            </div>
+          </div>
+        ) : (
+          <>
+            <Link
+              href={`/instructor/sessions/${session.id}`}
+              className="block"
+            >
+              <p className={`text-sm font-medium leading-snug truncate ${
+                isSelected ? "text-primary-700" : "text-neutral-800"
+              }`}>
+                {session.title}
+              </p>
+              <p className="mt-0.5 text-xs text-neutral-400">
+                {session.instructor_name ? `${session.instructor_name} - ` : ""}
+                {formatDate(session.created_at)}
+                {` · ${session.unsolved_files.length} file${session.unsolved_files.length === 1 ? "" : "s"}`}
+              </p>
+            </Link>
+            <div className="mt-1 flex gap-1">
+              {isConfirmingDelete ? (
+                <>
+                  <SmallButton
+                    tone="danger"
+                    onClick={() => void handleDelete(session)}
+                    disabled={isBusy}
+                  >
+                    Confirm delete
+                  </SmallButton>
+                  <SmallButton
+                    onClick={() => setConfirmingDeleteId(null)}
+                    disabled={isBusy}
+                  >
+                    Cancel
+                  </SmallButton>
+                </>
               ) : (
-                <Link
-                  href={`/instructor/sessions/${session.id}`}
-                  className="min-w-0 flex-1 rounded-md py-1 transition hover:bg-slate-50"
-                >
-                  <span className="block truncate text-sm font-medium text-slate-900">
-                    {session.title}
-                  </span>
-                  <span className="block text-xs text-slate-500">
-                    {session.instructor_name ? `${session.instructor_name} · ` : ""}
-                    Created {formatDate(session.created_at)} ·{" "}
-                    {session.unsolved_files.length}{" "}
-                    {session.unsolved_files.length === 1 ? "file" : "files"}
-                  </span>
-                </Link>
+                <>
+                  <SmallButton onClick={() => startRename(session)}>Rename</SmallButton>
+                  <SmallButton
+                    tone="danger"
+                    onClick={() => setConfirmingDeleteId(session.id)}
+                  >
+                    Delete
+                  </SmallButton>
+                </>
               )}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
 
-              <span className="flex shrink-0 items-center gap-2">
-                {isRenaming ? (
-                  <>
-                    <SmallButton onClick={() => saveRename(session)} disabled={renamePending}>
-                      {renamePending ? "Saving…" : "Save"}
-                    </SmallButton>
-                    <SmallButton onClick={cancelRename} disabled={renamePending}>
-                      Cancel
-                    </SmallButton>
-                  </>
-                ) : isConfirmingDelete ? (
-                  <>
-                    <SmallButton
-                      tone="danger"
-                      onClick={() => handleDelete(session)}
-                      disabled={isBusy}
-                    >
-                      Confirm delete
-                    </SmallButton>
-                    <SmallButton
-                      onClick={() => setConfirmingDeleteId(null)}
-                      disabled={isBusy}
-                    >
-                      Cancel
-                    </SmallButton>
-                  </>
-                ) : (
-                  <>
-                    <SmallButton onClick={() => startRename(session)}>Rename</SmallButton>
-                    <SmallButton
-                      tone="danger"
-                      onClick={() => setConfirmingDeleteId(session.id)}
-                    >
-                      Delete
-                    </SmallButton>
-                  </>
-                )}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-    </>
+  return (
+    <SessionShell
+      sessions={sessionItems}
+      selectedId={null}
+      onSelect={(id) => router.push(`/instructor/sessions/${id}`)}
+      hrefBase="/instructor/sessions"
+      listLabel="Sessions"
+      loading={sessions === null}
+      emptyLabel="No sessions yet."
+      renderItem={renderItem}
+    >
+      <div className="space-y-6">
+        {loadError ? <FormError>{loadError}</FormError> : null}
+        {deleteError ? <FormError>{deleteError}</FormError> : null}
+
+        <CreateSessionForm
+          onCreated={(created) => {
+            setSessions((current) => [created, ...(current ?? [])]);
+            router.push(`/instructor/sessions/${created.id}`);
+          }}
+        />
+
+      </div>
+    </SessionShell>
+  );
+}
+
+// ── Create session form ───────────────────────────────────────────────────────
+
+function CreateSessionForm({ onCreated }: { onCreated: (s: SessionRead) => void }) {
+  const [title, setTitle] = useState("");
+  const [titleError, setTitleError] = useState<string | undefined>();
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  async function handleCreate(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCreateError(null);
+    const trimmed = title.trim();
+    if (!trimmed) { setTitleError("Session title is required."); return; }
+    setTitleError(undefined);
+    setPending(true);
+    try {
+      const created = await createSession(trimmed);
+      setTitle("");
+      onCreated(created);
+    } catch (error) {
+      setCreateError(
+        error instanceof ApiError ? error.detail : "Could not create the session.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="lms-card">
+      <h2 className="text-base font-semibold text-neutral-900">Create a session</h2>
+      {createError ? <FormError>{createError}</FormError> : null}
+      <form onSubmit={handleCreate} noValidate>
+        <Field
+          label="Session title"
+          name="title"
+          placeholder="Week 3 Day 1"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          error={titleError}
+        />
+        <SubmitButton pending={pending}>Create session</SubmitButton>
+      </form>
+    </div>
   );
 }

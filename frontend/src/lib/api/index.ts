@@ -38,5 +38,19 @@ export {
 } from "./submissions";
 export { getGradeReport, getMyGrades, getStudentGrades } from "./grades";
 export { postChat, streamChat, parseSseFrame } from "./chat";
+export { uploadLecture, listLectures, downloadLecture } from "./lectures";
+export {
+  streamStudentChat,
+  type StudentChatHandlers,
+  type StudentChatOutcome,
+  type StudentChatResult,
+} from "./student-chat";
+export {
+  generateQuiz,
+  generateQuizFromUpload,
+  submitQuiz,
+  getQuizAttempt,
+  getQuizHistory,
+} from "./quiz";
 
 export * from "./types";

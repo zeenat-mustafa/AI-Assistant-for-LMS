@@ -143,10 +143,10 @@ describe("<InstructorDashboard /> — session list", () => {
     render(<InstructorDashboard />);
 
     const mine = await screen.findByRole("link", { name: /mine/i });
-    expect(within(mine).getByText(/Demo Instructor ·/)).toBeInTheDocument();
+    expect(within(mine).getByText(/Demo Instructor -/)).toBeInTheDocument();
 
     const someoneElses = screen.getByRole("link", { name: /someone else's/i });
-    expect(within(someoneElses).getByText(/Demo Instructor 2 ·/)).toBeInTheDocument();
+    expect(within(someoneElses).getByText(/Demo Instructor 2 -/)).toBeInTheDocument();
   });
 
   it("surfaces a load failure instead of pretending the list is empty", async () => {

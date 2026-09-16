@@ -10,6 +10,8 @@ DELETE /sessions/{session_id}                 → delete session + all stored fi
 POST   /sessions/{session_id}/grade           → grade all ungraded submissions in a session (instructor only)
 """
 
+import json
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -23,9 +25,11 @@ from app.schemas.session import SessionCreate, SessionList, SessionRead, Session
 from app.schemas.assignment_upload import AssignmentUploadRead
 from app.schemas.unsolved_file import UnsolvedFileRead
 from app.schemas.resource_file import ResourceFileRead
+from app.schemas.lecture_file import LectureFileRead
 from app.services.auth import get_current_user, require_instructor
 from app.services.storage import delete_session_storage
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
@@ -47,6 +51,9 @@ def _session_read(session: LMSSession) -> SessionRead:
         resource_files=[
             ResourceFileRead.from_orm_model(f) for f in session.resource_files
         ],
+        lecture_files=[
+            LectureFileRead.from_orm_model(f) for f in session.lecture_files
+        ],
     )
 
 
@@ -58,6 +65,56 @@ def _get_session_or_404(session_id: int, db: Session) -> LMSSession:
             detail=f"Session {session_id} not found.",
         )
     return session
+
+
+def _quiz_attempts_for_session(
+    db: Session, session_id: int, unsolved_file_ids: list[int],
+) -> list["QuizAttempt"]:  # noqa: F821 -- imported locally in delete_session
+    """
+    Quiz attempts referencing *session_id* -- directly ("session" scope), via
+    one of the session's own unsolved files ("assignment_file" scope, whose
+    ids must be gathered from the still-live UnsolvedFile rows before the
+    session cascade-deletes them), or as one of several sessions
+    ("multiple_sessions" scope). "topic" and "uploaded_file" scopes can never
+    reference a session and are excluded before any JSON is even read.
+
+    Filters at the query level (scope_type, plus SQLite's JSON1
+    json_extract for the two scalar cases) rather than loading every quiz
+    attempt in the database — QuizAttempt.scope_detail is a JSON Text
+    column with no FK (by design: attempt history must survive a file/
+    session deletion elsewhere), so scope_type is the only indexed-ish
+    column available to narrow the query before inspecting scope_detail.
+    "multiple_sessions" (a JSON array) still needs an in-Python membership
+    check, but only over that scope_type's own rows, not the whole table.
+    """
+    from app.models.quiz_attempt import QuizAttempt
+    from sqlalchemy import func, or_
+
+    conditions = [func.json_extract(QuizAttempt.scope_detail, "$.session_id") == session_id]
+    if unsolved_file_ids:
+        conditions.append(
+            func.json_extract(QuizAttempt.scope_detail, "$.unsolved_file_id").in_(unsolved_file_ids)
+        )
+    direct_matches = (
+        db.query(QuizAttempt)
+        .filter(QuizAttempt.scope_type.in_(["session", "assignment_file"]))
+        .filter(or_(*conditions))
+        .all()
+    )
+
+    multi_session_candidates = (
+        db.query(QuizAttempt).filter(QuizAttempt.scope_type == "multiple_sessions").all()
+    )
+    multi_session_matches = []
+    for attempt in multi_session_candidates:
+        try:
+            scope_detail = json.loads(attempt.scope_detail)
+        except (json.JSONDecodeError, TypeError):
+            continue  # malformed JSON — skip, never crash the delete
+        if session_id in (scope_detail.get("session_ids") or []):
+            multi_session_matches.append(attempt)
+
+    return direct_matches + multi_session_matches
 
 
 def _check_title_available(
@@ -173,10 +230,90 @@ def delete_session(
     db: Annotated[Session, Depends(get_db)],
     _instructor: Annotated[User, Depends(require_instructor)],
 ) -> None:
+    """
+    Delete a session and fully clean up all related data:
+      - DB rows (cascaded via SQLAlchemy relationships)
+      - Quiz attempts (manual cleanup since session_id is in JSON, not a FK) --
+        "session", "assignment_file" (via the session's own unsolved files),
+        and "multiple_sessions" scopes are all covered; "topic" and
+        "uploaded_file" scopes never reference a session by construction.
+      - Disk files (storage/sessions/{session_id}/)
+      - Chroma vector embeddings (queried by session_id metadata, not reconstructed from files)
+    """
+    from app.services.embeddings import get_chroma_collection
+
     session = _get_session_or_404(session_id, db)
+
+    # Gathered before the session (and its cascade-deleted UnsolvedFile rows)
+    # are removed below — an "assignment_file"-scoped quiz attempt is only
+    # matchable while these ids still exist.
+    unsolved_file_ids = [
+        row.id for row in db.query(UnsolvedFile.id).filter(UnsolvedFile.session_id == session_id).all()
+    ]
+
+    # ── 1. Query Chroma for ALL chunks with this session_id ──────────────────
+    # Don't reconstruct chunk IDs from files/DB rows — query Chroma directly
+    # by metadata, which is more reliable (files may be corrupt/missing, DB
+    # rows may have embedded=True but the vector could have been manually
+    # deleted, etc.). Chroma's where filter will find everything that actually
+    # exists in the collection for this session.
+    chunk_ids_to_delete = []
+    try:
+        collection = get_chroma_collection()
+        # Query with where filter, requesting a very large n_results to get everything
+        results = collection.get(
+            where={"session_id": session_id},
+            include=["metadatas"],  # We only need the IDs, not documents/embeddings
+        )
+        chunk_ids_to_delete = results.get("ids", [])
+        if chunk_ids_to_delete:
+            logger.info(
+                "Found %d Chroma chunks to delete for session %d",
+                len(chunk_ids_to_delete),
+                session_id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to query Chroma chunks for session %d: %s (will proceed with deletion anyway)",
+            session_id,
+            exc,
+        )
+
+    # ── 2. Delete quiz attempts scoped to this session ───────────────────────
+    # Quiz attempts store session_id (or unsolved_file_id) inside JSON
+    # scope_detail, not as a FK, so they don't cascade. Found and deleted
+    # manually — see _quiz_attempts_for_session's docstring for exactly
+    # which scopes are covered and how the query is narrowed.
+    session_quiz_attempts = _quiz_attempts_for_session(db, session_id, unsolved_file_ids)
+    for attempt in session_quiz_attempts:
+        db.delete(attempt)
+
+    # ── 3. Delete the session (cascades to all FK-linked rows) ───────────────
     db.delete(session)
     db.commit()
+
+    # ── 4. Clean up disk files ────────────────────────────────────────────────
     delete_session_storage(session_id)
+
+    # ── 5. Clean up Chroma vectors ────────────────────────────────────────────
+    if chunk_ids_to_delete:
+        try:
+            from app.services.embeddings import delete_chunks
+            delete_chunks(chunk_ids_to_delete)
+            logger.info(
+                "Deleted %d Chroma chunks for session %d",
+                len(chunk_ids_to_delete),
+                session_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Chroma cleanup failure should not prevent session deletion from
+            # completing — the DB rows and disk files are already gone.
+            # Log the error but don't raise (matches embeddings.retrieve convention).
+            logger.warning(
+                "Failed to delete Chroma chunks for session %d: %s",
+                session_id,
+                exc,
+            )
 
 
 # ── Batch session grading ─────────────────────────────────────────────────────

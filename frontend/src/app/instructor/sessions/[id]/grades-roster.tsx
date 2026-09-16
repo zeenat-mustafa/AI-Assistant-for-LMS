@@ -1,31 +1,19 @@
 "use client";
 
 /**
- * Per-session grade roster (5.4, Step 1).
+ * Per-session grade roster.
  *
- * Two things about the backend's shape drive this component, and neither is
- * obvious from the schema docstrings:
- *
- * 1. `session_grade_report` is built from Submission rows, so a student who
- *    has submitted NOTHING never appears at all. There is no student-listing
- *    endpoint anywhere in the API to cross-reference against (the whole
- *    surface is 21 routes; auth.py has only login/me/register), so the table
- *    genuinely cannot be completed client-side. This is a real, permanent
- *    limitation -- documented in docs/phase5-known-gaps-record.txt rather than as
- *    an on-screen footnote (bugfix-roster-footnote removed the latter).
- *
- * 2. `combined_score` is null ONLY when the session has no assignment files.
- *    A student who submitted but has nothing graded yet gets 0.0 -- which
- *    would read as "scored zero" if rendered naively. `per_file.length` is
- *    what actually distinguishes the two, so that is what is checked.
+ * One row per student who has submitted. Students with no submission never
+ * appear — there is no student-listing endpoint to cross-reference against.
+ * combined_score is 0.0 for both "nothing graded" and a genuine zero;
+ * per_file.length is the real grading-status signal.
  */
 
 import { useState } from "react";
 
 import { ApiError, downloadSubmissionUpload } from "@/lib/api";
 import type { GradeSummary, SessionGradeReport, SubmissionRead } from "@/lib/api";
-import { EmptyState, Loading, Panel, SmallButton } from "@/components/ui";
-import { FormError } from "@/components/ui";
+import { EmptyState, FormError, Loading, SmallButton } from "@/components/ui";
 import { GradeFileRow } from "@/components/grade-file-row";
 import { formatDate } from "@/lib/format";
 import { triggerBlobDownload } from "@/lib/download";
@@ -38,31 +26,23 @@ export function GradesRoster({
   submissionsByStudent,
 }: {
   sessionId: number;
-  /** null while loading. */
   report: SessionGradeReport | null;
   error: string | null;
   totalAssignmentFiles: number;
-  /**
-   * Every student's SubmissionUpload rows, keyed by student_id -- lets this
-   * roster also show/download exactly what each student uploaded, the same
-   * way assignment files are shown to instructors. `undefined` while loading
-   * (a student simply has no entry if they've uploaded nothing).
-   */
   submissionsByStudent: Record<number, SubmissionRead> | undefined;
 }) {
   return (
-    <Panel
-      title="Submissions & grades"
-      description="One row per student who has submitted to this session."
-    >
+    <div className="lms-card">
+      <h2 className="text-base font-semibold text-neutral-900">Submissions &amp; grades</h2>
+
       {error ? <FormError>{error}</FormError> : null}
 
       {report === null && !error ? (
-        <Loading>Loading grades…</Loading>
+        <Loading>Loading grades...</Loading>
       ) : report && report.students.length === 0 ? (
         <EmptyState>No submissions for this session yet.</EmptyState>
       ) : report ? (
-        <ul className="divide-y divide-slate-200">
+        <ul className="divide-y divide-neutral-100">
           {report.students.map((student) => (
             <StudentRow
               key={student.student_id}
@@ -74,7 +54,7 @@ export function GradesRoster({
           ))}
         </ul>
       ) : null}
-    </Panel>
+    </div>
   );
 }
 
@@ -98,10 +78,10 @@ function StudentRow({
     <li className="py-3">
       <div className="flex items-center justify-between gap-4">
         <span className="min-w-0">
-          <span className="block truncate text-sm font-medium text-slate-900">
+          <span className="block truncate text-sm font-medium text-neutral-900">
             {student.student_name}
           </span>
-          <span className="block text-xs text-slate-500">
+          <span className="block text-xs text-neutral-500">
             {gradedCount} of {totalAssignmentFiles}{" "}
             {totalAssignmentFiles === 1 ? "file" : "files"} graded
           </span>
@@ -118,13 +98,13 @@ function StudentRow({
       </div>
 
       {expanded ? (
-        <div className="mt-3 border-l-2 border-slate-200 pl-4">
+        <div className="mt-3 border-l-2 border-neutral-200 pl-4">
           {uploads.length > 0 ? (
             <div className="mb-3">
-              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-400">
+              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-neutral-400">
                 Submitted files
               </p>
-              <ul className="divide-y divide-slate-100">
+              <ul className="divide-y divide-neutral-100">
                 {uploads.map((upload) => (
                   <UploadRow key={upload.id} sessionId={sessionId} upload={upload} />
                 ))}
@@ -132,7 +112,6 @@ function StudentRow({
             </div>
           ) : null}
 
-          {/* Each graded file collapses to filename + score. */}
           {!nothingGraded ? (
             <ul>
               {student.per_file.map((grade) => (
@@ -176,35 +155,30 @@ function UploadRow({
   return (
     <li className="flex items-center justify-between gap-3 py-1.5">
       <span className="min-w-0">
-        <span className="block truncate text-xs font-medium text-slate-800">
+        <span className="block truncate text-xs font-medium text-neutral-800">
           {upload.original_filename}
         </span>
-        {error ? <span className="block text-xs text-red-600">{error}</span> : null}
-        <span className="block text-xs text-slate-500">
+        {error ? <span className="block text-xs text-danger-600">{error}</span> : null}
+        <span className="block text-xs text-neutral-500">
           Uploaded {formatDate(upload.uploaded_at)}
         </span>
       </span>
       <SmallButton onClick={() => void handleDownload()} disabled={busy}>
-        {busy ? "Downloading…" : "Download"}
+        {busy ? "Downloading..." : "Download"}
       </SmallButton>
     </li>
   );
 }
 
-/**
- * A 0.0 from the backend means "nothing graded yet" whenever `per_file` is
- * empty, so it must not be shown as a score of zero.
- */
 function ScoreBadge({ student }: { student: GradeSummary }) {
   if (student.per_file.length === 0) {
-    return <span className="text-xs text-slate-500">Not graded yet</span>;
+    return <span className="text-xs text-neutral-500">Not graded yet</span>;
   }
   if (student.combined_score === null) {
-    // Only reachable when the session has no assignment files at all.
-    return <span className="text-xs text-slate-500">No assignment files</span>;
+    return <span className="text-xs text-neutral-500">No assignment files</span>;
   }
   return (
-    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-sm font-medium tabular-nums text-slate-900">
+    <span className="lms-badge lms-badge-primary tabular-nums text-sm px-2.5 py-1">
       {student.combined_score} / 10
     </span>
   );

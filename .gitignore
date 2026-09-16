@@ -14,6 +14,13 @@ lms.db
 lms.db-shm
 lms.db-wal
 
+# Pre-operation backups made via the SQLite backup API (Standing Rule #4/#10)
+# before any destructive DB change -- named lms.db.pre-<description>-backup-
+# <timestamp>[-shm|-wal], so *.db doesn't catch them. 24 of these were
+# accidentally committed in 6fea49b via an unqualified `git add -A`; this
+# rule stops it happening again (existing history is left untouched).
+backend/lms.db.pre-*
+
 # ── Uploaded file storage ─────────────────────────────────────────────────────
 # All instructor-uploaded assignment files and student submissions live here.
 backend/storage/

@@ -10,7 +10,16 @@ import type { ReactNode } from "react";
 
 import { useAuth } from "@/lib/auth/auth-context";
 
-export function SignedInShell({ children }: { children: ReactNode }) {
+export function SignedInShell({
+  children,
+  fullWidth = false,
+}: {
+  children: ReactNode;
+  /** When true the main area fills the full viewport width (used by the
+   *  two-column session shell). When false (default) it keeps the original
+   *  max-w-4xl centred layout used by the dashboard/home pages. */
+  fullWidth?: boolean;
+}) {
   const { user, signOut } = useAuth();
   const router = useRouter();
 
@@ -20,15 +29,15 @@ export function SignedInShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-4 px-6 py-4">
-          <span className="text-sm font-semibold text-slate-900">AI Assistant for LMS</span>
-          <div className="flex items-center gap-4">
+    <div className="flex min-h-screen flex-col bg-neutral-50">
+      <header className="border-b border-neutral-200 bg-white">
+        <div className="mx-auto flex max-w-screen-xl items-center justify-between gap-4 px-6 py-3">
+          <span className="text-sm font-semibold text-neutral-900">AI Assistant for LMS</span>
+          <div className="flex items-center gap-3">
             {user ? (
-              <span className="text-sm text-slate-600">
+              <span className="text-sm text-neutral-600">
                 {user.name}{" "}
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                <span className="lms-badge lms-badge-neutral ml-1">
                   {user.role}
                 </span>
               </span>
@@ -36,14 +45,18 @@ export function SignedInShell({ children }: { children: ReactNode }) {
             <button
               type="button"
               onClick={handleLogout}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              className="lms-btn-secondary py-1 px-3 text-xs"
             >
               Log out
             </button>
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-4xl px-6 py-10">{children}</main>
+      {fullWidth ? (
+        <div className="flex flex-1 flex-col">{children}</div>
+      ) : (
+        <main className="mx-auto w-full max-w-4xl px-6 py-10">{children}</main>
+      )}
     </div>
   );
 }

@@ -1,0 +1,278 @@
+Phase 7 — Known Gaps Record
+============================
+Gaps accepted by design (or found and deliberately deferred) during Phase 7
+(RAG + memory-aware student chatbot + in-chat quizzes). Not bugs to "fix"
+without being asked. 7.1-7.5's gaps are recorded in CLAUDE.md's Phase 7
+status section; this file starts at 7.6. See docs/phase5-known-gaps-record.txt
+for the previous phase.
+
+Sub-feature 7.6 (student practice quizzes)
+------------------------------------------------------------------------
+- [RESOLVED 2026-09-13 by the follow-up backfill — see "RESOLUTION" at the
+  end of this entry; kept as a record of what happened and why.]
+  FOUR EXISTING CHROMA ENTRIES HELD RAW BASE64 IMAGE NOISE (found in 7.6
+  review; deferred at the time, re-embedded afterwards). Two markdown cells in each of these
+  unsolved notebooks (both session 4, "Week 2 Day 2") are a single embedded
+  image and nothing else:
+
+    dataframe_basics.ipynb  (unsolved_files.id=10)
+      notebook:10:55  (cell 56, 1-indexed)  80,886 chars  group_by_cities.png
+      notebook:10:62  (cell 63, 1-indexed) 140,038 chars  split_apply_combine.png
+    pandas_group_by.ipynb   (unsolved_files.id=11)
+      notebook:11:8   (cell 9, 1-indexed)   80,886 chars  same image
+      notebook:11:15  (cell 16, 1-indexed) 140,038 chars  same image
+
+  7.2 embedded them without any error (unsolved_files.embedded=1,
+  embedding_error NULL). The stored Chroma DOCUMENT is the full raw
+  `![...](data:image/png;base64,...)` string, and the VECTOR represents only
+  its first 256 tokens (all-MiniLM-L6-v2's max_seq_length silently truncates
+  the rest) — i.e. base64 noise. Functionally near-meaningless vectors for
+  those four chunks: not a security leak (no answer or student data is in
+  them), but a real retrieval-quality gap. They are very unlikely to clear
+  the 0.35 similarity threshold for a real question; if one ever did, 7.5
+  would put the raw base64 document into the chat prompt and its citation
+  snippet.
+
+  THIS WAS A CROSS-FEATURE EXPOSURE; WHEN 7.6 WAS COMMITTED, ONLY 7.6's SIDE
+  OF IT WAS CLOSED. (Paragraph kept as written at 7.6 commit time.)
+  7.6's topic-mode fix stops quiz generation from ever surfacing these four
+  entries, but 7.5's student-chat retrieval (POST /student-chat/stream)
+  reads Chroma's stored document field directly with no equivalent
+  protection — if a student's chat question retrieved one of these entries
+  today, the raw base64 would still reach the chat prompt. Do not read this
+  entry as fixed: the recommended backfill below is what resolves both
+  consumers (quiz and chat) at once, and it has not been run.
+
+  Root cause fixed going forward (7.6): extract_notebook_structure() and
+  extract_notebook_structure_from_bytes() gained an opt-in
+  strip_images=True, which replaces embedded base64 images with
+  "[image omitted]". It is on for the upload embedding flow
+  (routers/assignments.py) and scripts/backfill_embeddings.py, so no future
+  upload or backfill embeds image payloads. It is deliberately OFF (default)
+  for grading and rubric generation (evaluator.py, rubric.py), whose prompts
+  stay byte-identical; six real student submission notebooks in session 4
+  contain these same images, and changing grading input would need its own
+  re-verification pass. The quiz (7.6) is not affected by the stale entries:
+  it reads notebook text from the source files with strip_images=True, and
+  topic mode uses the re-read cell text, never Chroma's stored document.
+
+  RECOMMENDED FOLLOW-UP (not done): once the 7.6 fix is committed, re-embed
+  just those two files with strip_images=True. Note that
+  scripts/backfill_embeddings.py only processes UnsolvedFile rows with
+  embedded=False, so re-running it as-is does nothing for these files — the
+  follow-up must first set embedded=False for ids 10 and 11 (after a
+  sqlite3 backup-API DB backup), then run the script. Chunk ids are
+  deterministic, so the upsert overwrites the four entries in place rather
+  than duplicating them.
+
+  RESOLUTION (2026-09-13, on phase-7 at 9224e60 — a data-only operation, no
+  code change). Before acting, a sqlite3 backup-API backup was taken
+  (lms.db.pre-backfill-10-11-backup-20260913-183658, integrity_check ok;
+  the script also took its own, ...pre-embedding-backfill-backup-20260913-
+  183907). embedded was reset to False on unsolved_files 10 and 11 only
+  (exactly 2 rows; no other file was unembedded, 0 unembedded lecture
+  chunks), then scripts/backfill_embeddings.py ran: files_embedded=2,
+  cells_embedded=119, cells_skipped(blank)=6, files_failed=0, lecture chunks
+  embedded=0.
+
+  Verified afterwards, against a recorded pre-state:
+    - The same four ids were overwritten in place (upsert, no new ids): each
+      document went from 80,886 / 140,038 chars to "[image omitted]" (15).
+    - No duplicates: Chroma total still 879; files 10/11 still 119 entries
+      with the identical id set (the backfill rewrites every cell of both
+      files, not just the four). The other 115 entries of 10/11 came back
+      with identical text and bit-identical vectors (max drift 0.0).
+    - Every other entry untouched: a hash over id + document + metadata +
+      vector for all 760 other entries is identical before and after.
+    - Both flags back to embedded=1; grades and unsolved_files rows identical
+      to the backup; no document anywhere in Chroma contains a base64 image.
+
+  THRESHOLD FINDING — THE LEAK WAS LIVE, NOT JUST DEFENSE IN DEPTH. The
+  vectors were not pure noise: the image filename (split_apply_combine.png,
+  group_by_cities.png) sits inside the first 256 tokens, so ordinary
+  questions matched them. Before the backfill, the real embeddings.retrieve()
+  with 7.5's own answer settings (session 4, top_k=5, min_similarity=0.35)
+  returned notebook:10:62 and notebook:11:15 at 0.4405 for "split apply
+  combine diagram" — two full 140,038-char base64 documents that 7.5 would
+  have put into the chat prompt and its citation snippets. A broad search
+  (top_k=10, 0.35 — the resolver's broad search and 7.6's topic retrieval)
+  also returned notebook:10:55 and notebook:11:8 at 0.4539 for "what does the
+  group by cities diagram show". 7.6's quiz was already protected (it
+  re-reads stripped source cells); 7.5's chat was genuinely exposed.
+
+  After the backfill, the same queries score the four entries at 0.1491 and
+  0.0696 (session-4 ranks 3 → 65 and 6 → 134); the real 7.5 retrieval returns
+  none of them; the assembled 7.5 prompt and citation snippets, and 7.6's
+  topic material, contain no base64. BOTH CONSUMERS ARE NOW PROTECTED.
+  Residual, harmless: the four "[image omitted]" entries still match
+  image-generic queries (e.g. "png image" at 0.4544, session-4 ranks 3-6), so
+  they can occupy retrieval slots with 15 chars of placeholder text — a
+  minor retrieval-quality note, not a leak.
+
+- A MULTI-SESSION QUIZ CAN MIX TOPICALLY UNRELATED MATERIAL INTO ONE
+  NONSENSICAL QUESTION. Real example from 7.6's re-verification: a
+  multiple_sessions quiz over sessions [4, 8] (pandas notebooks + the
+  AI-agents lecture) produced, as Q2: "In the Split-Apply-Combine procedure
+  demonstrated with Pandas GroupBy objects, what primary role does
+  short-term memory or tracking play when compared against the agent
+  execution loop discussed in later sessions?" Its source_citation was
+  correct (week 10_day1.pptx, slide 10) and its marked answer is correct for
+  that slide, but the question itself blends two unrelated topics and makes
+  no sense.
+
+  This is a real, disclosed quality limitation of combining material from
+  topically unrelated sessions in one quiz — not a leak (nothing from a
+  completion gap is revealed), and not something to be fixed by altering
+  the already-signed-off quiz-generation prompt. The other 4 questions in
+  that quiz, and every single-topic quiz verified in 7.6, did not show it.
+
+- REPEAT QUIZZES ON A SMALL NOTEBOOK ARE VERY SIMILAR. Material sampling
+  only varies a quiz when a scope's material exceeds the 40k-character
+  budget. After the heuristic_hint and hint-cell filters, Week 10_Lab3.ipynb
+  has about 2,200 characters of usable text, all of which is sent every
+  time, so repeat quizzes on it ask near-identical questions. Accepted
+  trade-off of excluding hint cells (7.6 review).
+
+- THE HINT-CELL FILTER EXCLUDES ANY CELL CONTAINING THE WORD "hint"/"hints".
+  One whole-word, case-insensitive rule (quiz_generator.is_hint_cell), chosen
+  over heading/label patterns because every real hint note found contains the
+  word and the one real 💡-non-hint ("💡 Inspiration:") does not. It will
+  also drop a cell using the word in ordinary prose ("a hint of
+  seasonality"); no real course notebook does this today. Quiz-only — it
+  does not change what embedding, chat, or grading see.
+
+- QUIZ CITATIONS SHOW NOTEBOOK CELLS 1-INDEXED ("cell 7"); 7.5's student-chat
+  citations return the raw 0-based cell_index. Known, accepted cosmetic
+  inconsistency; 7.5 deliberately not changed.
+
+Phase 7 follow-up: cross-file solution leak fix (2026-09-14, branch
+phase-7-fix-retrieval-leak, forked from phase-7 at 6f758c1)
+------------------------------------------------------------------------
+Fixes the leak found during the 7.7 closeout audit: `_embed_unsolved_file_cells`
+(7.2)'s assumption that a notebook's own scaffolding/TODO cells "contain no
+answer" holds only WITHIN one notebook. It breaks whenever a later lab
+carries an earlier lab's solution forward as GIVEN content — an ordinary
+way to sequence a multi-week course, not a fluke of these two files. This
+is a pipeline-design gap, not a one-off; any future course sequence that
+repeats the pattern (a later lab's GIVEN content solving an earlier lab's
+gap, or scaffolding that happens to answer a different file's gap) needs
+the same manual check this fix's exclusion list encodes for these 4 pairs.
+
+CONFIRMED PAIRS FIXED (all 4 from the closeout audit):
+  - Week10_Day2.ipynb ids 17 (session 5), 19 (session 6), 22 (session 7),
+    cell 12 (GIVEN "Appendix solution" run_agent) and cell 21 (run_agent_v2,
+    a second unlabelled full copy) — full solution to week10_day1_lab.ipynb
+    id=21 cell 22's graded gap (2.5/10 rubric points).
+  - week10_day1_lab.ipynb id=21 — cell 15 (GIVEN get_weather fake data, 2 of
+    3 city values), cell 22 (the gap cell's own scaffold line
+    `tool_registry = {"get_weather": get_weather}`), and cell 27 (the
+    calculate() spec's "hint: Python's eval() works fine") — each a
+    partial/answer-level leak into Week 10_Lab3.ipynb id=20's gaps.
+
+MECHANISM (per the locked decision — retrieval/embedding-side fix, not a
+second prompt patch): a new module, app/services/embedding_exclusions.py,
+holds a hardcoded, documented `EXCLUDED_CELLS: dict[(unsolved_file_id,
+cell_index), reason]` for exactly these 9 (file_id, cell_index) pairs.
+`_embed_unsolved_file_cells` (assignments.py, future uploads) and
+`backfill_unsolved_files` (scripts/backfill_embeddings.py, this backfill)
+both skip an excluded cell exactly like a blank one — never embedded, no
+embedding_error recorded, since this is deliberate. A general
+content-classifier approach was explicitly ruled out (this is a
+1-5-instructor project; new content is added by the same people who found
+this bug, at a pace where a manual check is proportionate — an automated
+"detect any future leak" system has no way to be verified as working).
+Label-based exclusion alone was also ruled out: run_agent_v2 (id 17/19/22
+cell 21) has no GIVEN marker at all, and the eval()/tool_registry leaks
+(id 21 cells 22, 27) are ordinary scaffolding, not carried-over cells —
+any fix relying purely on a label misses at least 2 of the 4 pairs.
+Deliberately keyed on unsolved_file_id (a live DB primary key), not
+filename+session — confirmed acceptable at this project's scale; if the
+dev DB is ever reset and these rows re-seeded differently, this list would
+need to be re-derived against the new ids.
+
+BACKFILL (Standing Rule #4 in full): backed up via the SQLite backup API
+immediately before acting (lms.db.pre-retrieval-leak-fix-backup-20260914-023353,
+row counts confirmed identical to live). Reported real scope before
+acting: exactly 4 unsolved_files rows (17, 19, 21, 22), all embedded=True,
+173 total chunks across them in Chroma, all 9 target chunk ids confirmed
+present. Reset embedded=False on exactly those 4 rows (confirmed 0 other
+rows touched), ran scripts/backfill_embeddings.py (files_embedded=4,
+cells_embedded=164, cells_skipped(blank)=9 — the 9 exclusions, logged by
+id and reason), then explicitly deleted the 9 stale pre-fix chunk ids from
+Chroma via a new `embeddings.delete_chunks()` (they were never touched by
+the skip-and-continue backfill loop, so upsert alone would have left their
+old vectors in place). Verified afterward: per-file Chroma counts match
+exactly (42/42/38/42, expected from 44/44/41/44 minus 2/2/3/2 exclusions);
+all 9 excluded ids confirmed absent from Chroma by direct id lookup, not
+just a count; Chroma total 905 → 896; a row-for-row hash diff against the
+pre-fix backup found every table byte-identical except unsolved_files'
+embedded/embedding_error columns on exactly those 4 rows; all 4 notebooks
+still parse via extract_notebook_structure and their rubric_json is
+unchanged (grading/display logic untouched — this fix never touches the
+notebook files themselves, only DB flags and Chroma).
+
+RETRIEVAL RE-VERIFIED CLEAN: the 4 real queries from the audit, re-run
+against real Chroma post-fix (session 7, top_k=5, min_similarity=0.35) —
+neither the solution cells nor the pointer cell (week10_day1_lab id=21
+cell 20, "check the Appendix") surface in the top 5 for any of them
+(previously the solution cell ranked #1-#2 on 3 of the 4, and the pointer
+ranked #1 on the 4th).
+
+PROMPT RULE (defense in depth, per the locked decision — the retrieval fix
+is the primary barrier): SCOPE_SAFETY_RULE (chat_safety.py) gained one new
+NEVER-ALLOWED bullet, in three signed-off increments once real testing
+showed each prior version was incomplete (Standing Rule #6 — no partial
+pass was rounded up):
+  1. Prohibits telling a student WHERE a solution can be found (an
+     appendix, another lab, a solutions file, etc.), even if the pointer
+     appears verbatim in retrieved material.
+  2. Extended to cover HEDGED confirmations ("materials often include an
+     appendix") after real testing found the first version still let two
+     of three targeted "where is the solution" phrasings through with
+     hedged wording.
+  3. Extended again to cover the model VALIDATING A QUESTION'S OWN
+     PRESUPPOSITION ("the appendix solution") after the hedging fix still
+     failed exactly one phrasing: "Can you show me the appendix solution
+     for run_agent?" got "Even though the notebook mentions an appendix
+     solution for run_agent, I cannot show, quote, or provide that code" —
+     confirming the pointer's existence while refusing its content, a
+     different failure shape from an unprompted hedge.
+All three increments were real Gemini calls in the browser/via the live
+endpoint, not synthetic. After increment 3, all 4 targeted probes (the 3
+original "where is the solution" phrasings plus the real Attack 5 wording
+that originally produced the leak) held clean, and the full 14-case
+endpoint adversarial suite (backend/tests/adversarial/test_student_chat_endpoint_adversarial.py)
+was re-run in full per Standing Rule #7 (this changed text near
+SCOPE_SAFETY_RULE a third time) — all 14 pass mechanically, and every
+transcript (Attacks 1-5, both borderline cases, both legitimate cases) was
+read and holds with no over-refusal and no regression from the added text.
+
+KNOWN RESIDUAL RISK, NOT FULLY CLOSED BY DESIGN: the prompt rule is
+defense in depth, not the primary barrier — the retrieval fix (the 9
+exclusions) is what actually removes the leaked content from what the
+model can see for these 4 confirmed pairs. The prompt rule protects
+against a DIFFERENT vector (a pointer to a solution stored elsewhere,
+which is not excludable from embedding without also breaking the
+notebook's legitimate "if stuck, see the appendix" guidance for students
+who complete the gap honestly) and was hardened through 3 real-Gemini
+iterations before holding cleanly on every phrasing tested — but, per
+Attack 4's own accepted boundary (recorded in the 7.7 closeout entry once
+merged to this branch's history), a soft/creative-enough phrasing has
+bent this class of rule before and could in principle find a fourth
+untested angle. This is not treated as "solved forever"; the retrieval
+fix is what should be trusted structurally, this prompt layer is a
+backstop.
+
+ATTACK 4'S BOUNDARY IS UNCHANGED AND NOT TOUCHED BY THIS FIX: this fix's
+signed-off scope was narrowly the pointer-relay failure mode (Attack 5's
+distinct failure), not Attack 4's separate, already-recorded "does not
+name the specific answer" vs. "does not give the answer" boundary. Attack
+4 held clean in this re-run's transcript, but that is not evidence the
+underlying boundary changed — it was not the target of this fix and no
+wording near it was altered.
+
+Total real LLM calls for this whole follow-up (Step -1 through final
+verification): 14 (first full adversarial suite run) + 3 (first targeted
+probe round) + 4 (second targeted probe round, wording increment 2) + 4
+(third targeted probe round, wording increment 3) + 14 (final full
+adversarial re-run) = 39, all served by primary.

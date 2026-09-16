@@ -46,11 +46,34 @@ Fill in `.env` with:
 
 Optionally override the model names with `GEMINI_PRIMARY_MODEL` / `GEMINI_FALLBACK_MODEL` (they default to the two models above).
 
-**3. Run the server**
+**3. Run the application**
+
+**Option A: Start both backend and frontend together (recommended for demos)**
+```powershell
+.\start-all.ps1
+```
+This single command starts both services with clearly prefixed output. The backend runs without auto-reload for demo stability. Press `Ctrl+C` to stop both cleanly.
+
+- Backend: **http://127.0.0.1:8000** (API docs at `/docs`)
+- Frontend: **http://localhost:3000**
+
+On first run, the backend creates the SQLite database and seeds two demo accounts (see below).
+
+**Option B: Run backend and frontend separately**
+
+Terminal 1 (backend):
 ```bash
+cd backend
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
-On first run, the server creates the SQLite database and seeds two demo accounts (see below). Interactive API docs are available at **http://localhost:8000/docs**.
+
+Terminal 2 (frontend):
+```bash
+cd frontend
+npm run dev
+```
+
+Use this option during active development when you want auto-reload on code changes.
 
 ## Database Migrations
 

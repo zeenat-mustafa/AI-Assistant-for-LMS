@@ -50,6 +50,10 @@ class SessionRead(BaseModel):
     # Supporting files (ResourceFile rows) extracted the same way. Kept for
     # the same internal-count reason; also never rendered as its own list.
     resource_files: list["ResourceFileRead"] = []  # noqa: F821
+    # Lecture files (Phase 7.1) — a fourth structural area, independently
+    # listed/downloaded exactly like assignment_uploads (a .pptx upload is
+    # never a zip bundling several files, so there's no derived-pieces split).
+    lecture_files: list["LectureFileRead"] = []  # noqa: F821
 
     model_config = {"from_attributes": True}
 
@@ -65,5 +69,6 @@ class SessionList(BaseModel):
 from app.schemas.assignment_upload import AssignmentUploadRead  # noqa: E402
 from app.schemas.unsolved_file import UnsolvedFileRead  # noqa: E402
 from app.schemas.resource_file import ResourceFileRead  # noqa: E402
+from app.schemas.lecture_file import LectureFileRead  # noqa: E402
 
 SessionRead.model_rebuild()
