@@ -218,3 +218,127 @@ class TestRenameSession:
         )
 
         assert res.status_code == 404
+
+
+# ===========================================================================
+# DELETE /sessions/{id} -- quiz attempt cleanup (Phase 7.8 audit fix, Item 3)
+# ===========================================================================
+# No automated test existed for this cleanup before this fix, for any scope
+# type -- these are new, not a rewrite. Covers the real gap the audit found
+# ("assignment_file"-scoped attempts referencing the deleted session were
+# never matched) alongside the two scopes the original fix did cover, plus
+# isolation from an unrelated session/scope.
+
+import json as _json
+
+from app.models.quiz_attempt import QuizAttempt
+from app.models.unsolved_file import UnsolvedFile
+
+
+def _attempt(student_id, scope_type, scope_detail):
+    return QuizAttempt(
+        student_id=student_id,
+        scope_type=scope_type,
+        scope_detail=_json.dumps(scope_detail),
+        questions_json=_json.dumps([{"question": "q", "options": ["a", "b", "c", "d"],
+                                      "correct_option_index": 0, "source_citation": "x"}] * 5),
+    )
+
+
+class TestDeleteSessionQuizAttemptCleanup:
+
+    @pytest.fixture()
+    def seeded(self, db):
+        """A fresh db (from the module's own `db` fixture) with an
+        instructor, a student, session 10 (with one unsolved file, id 100),
+        and an unrelated session 20 -- everything the cleanup cases need."""
+        db.add_all([
+            User(id=1, name="Prof", email="prof@x.com", hashed_password="h", role=UserRole.instructor),
+            User(id=2, name="Alice", email="alice@x.com", hashed_password="h", role=UserRole.student),
+            LMSSession(id=10, title="Week 3 Day 1", instructor_id=1),
+            LMSSession(id=20, title="Week 4 Day 1", instructor_id=1),
+        ])
+        db.commit()
+        db.add(UnsolvedFile(
+            id=100, session_id=10, original_filename="lab.ipynb",
+            file_path="10/assignments/lab.ipynb",
+        ))
+        db.commit()
+
+        def override_get_db():
+            yield db
+
+        app.dependency_overrides[get_db] = override_get_db
+        yield db
+        app.dependency_overrides.clear()
+
+    def _delete(self, db, session_id=10):
+        client = TestClient(app)
+        token = create_access_token(1, UserRole.instructor)
+        res = client.delete(f"/api/v1/sessions/{session_id}", headers={"Authorization": f"Bearer {token}"})
+        assert res.status_code == 204, res.text
+
+    def test_session_scoped_attempt_is_deleted(self, seeded):
+        db = seeded
+        db.add(_attempt(2, "session", {"session_id": 10}))
+        db.commit()
+        self._delete(db)
+        assert db.query(QuizAttempt).count() == 0
+
+    def test_multiple_sessions_scoped_attempt_is_deleted(self, seeded):
+        db = seeded
+        db.add(_attempt(2, "multiple_sessions", {"session_ids": [10, 20]}))
+        db.commit()
+        self._delete(db)
+        assert db.query(QuizAttempt).count() == 0
+
+    def test_assignment_file_scoped_attempt_is_deleted(self, seeded):
+        """The real gap the audit found: this scope has no session_id or
+        session_ids key at all -- only unsolved_file_id, which belongs to
+        the session being deleted."""
+        db = seeded
+        db.add(_attempt(2, "assignment_file", {"unsolved_file_id": 100}))
+        db.commit()
+        self._delete(db)
+        assert db.query(QuizAttempt).count() == 0
+
+    def test_topic_and_uploaded_file_scopes_are_never_touched(self, seeded):
+        """These scopes structurally can't reference any session -- confirms
+        they survive, rather than being accidentally swept up."""
+        db = seeded
+        db.add(_attempt(2, "topic", {"topic_text": "pandas"}))
+        db.add(_attempt(2, "uploaded_file", {"original_filename": "x.pptx", "file_type": "pptx"}))
+        db.commit()
+        self._delete(db)
+        assert db.query(QuizAttempt).count() == 2
+
+    def test_attempt_for_a_different_session_survives(self, seeded):
+        db = seeded
+        db.add(_attempt(2, "session", {"session_id": 20}))
+        db.commit()
+        self._delete(db, session_id=10)
+        assert db.query(QuizAttempt).count() == 1
+        assert _json.loads(db.query(QuizAttempt).one().scope_detail) == {"session_id": 20}
+
+    def test_multiple_sessions_attempt_not_referencing_the_deleted_session_survives(self, seeded):
+        db = seeded
+        db.add(_attempt(2, "multiple_sessions", {"session_ids": [20]}))
+        db.commit()
+        self._delete(db, session_id=10)
+        assert db.query(QuizAttempt).count() == 1
+
+    def test_mixed_scopes_only_the_referencing_ones_are_deleted(self, seeded):
+        db = seeded
+        db.add_all([
+            _attempt(2, "session", {"session_id": 10}),
+            _attempt(2, "assignment_file", {"unsolved_file_id": 100}),
+            _attempt(2, "multiple_sessions", {"session_ids": [10, 20]}),
+            _attempt(2, "session", {"session_id": 20}),
+            _attempt(2, "topic", {"topic_text": "pandas"}),
+        ])
+        db.commit()
+        self._delete(db, session_id=10)
+
+        remaining = db.query(QuizAttempt).all()
+        assert len(remaining) == 2
+        assert {a.scope_type for a in remaining} == {"session", "topic"}
