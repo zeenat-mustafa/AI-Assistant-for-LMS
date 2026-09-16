@@ -1,100 +1,172 @@
-# AI Assistant for LMS — Automated Grading & Feedback
+# AI Assistant for LMS — Automated Grading, RAG Chatbot & Practice Quizzes
 
-An instructor-directed AI grading assistant for Jupyter notebook assignments, built as a capstone project for the Purelogics Bootcamp.
+An instructor-directed AI grading assistant for Jupyter notebook assignments, plus a retrieval-grounded student course-assistant chatbot and non-grade-affecting practice quizzes. Built as a capstone project for the Purelogics Bootcamp. Instructors create a **Session** (e.g. "Week 8 Day 4"), upload the assignment notebook and lecture slides; students download, solve, and submit their work; the instructor triggers AI grading with a single natural-language chat instruction, and students can ask a chatbot questions about lectures/assignments or generate a short practice quiz — all grounded in the instructor's own uploaded material, never a generic answer.
 
-Instructors create a **Session** for a given class day (e.g. "Week 8 Day 4") and upload the assignment notebook. Students download it, complete their work, and submit it back to the same session. When ready, an instructor triggers grading with a single request — the system locates the relevant submissions, matches each one to its assignment, generates a tailored grading rubric, evaluates the work against it, and produces specific, individualized feedback for every student.
+<!--
+  SCREENSHOT — add before submitting:
+  1. Run the app (see "Run It" below) and sign in as instructor@demo.com / instructor123.
+  2. Screenshot the session dashboard (http://localhost:3000/instructor).
+  3. Save it as docs/screenshot.png and uncomment the line below.
+-->
+<!-- ![AI Assistant for LMS — instructor dashboard](docs/screenshot.png) -->
+**[ Screenshot pending — see the comment in this file's source for the exact steps to add one before submission ]**
 
-## How Grading Works
+## Table of Contents
 
-- **Dynamic, assignment-specific rubrics.** For each assignment, the system reads its instructions and structure to generate a grading rubric out of 10 points, tailored to that specific task. The rubric is generated once and reused consistently across every student's submission, ensuring fair and uniform grading.
-- **Rubrics weighted toward genuine student work.** The system distinguishes instructor-provided starter code from sections requiring student completion, and allocates the majority of the available points to the latter — recognizing correct student-authored logic, completed exercises, and answered questions, wherever they appear in the notebook.
-- **Context-aware submission matching.** Each submitted notebook is matched to its corresponding assignment by comparing the substance of the work — the retained instructions and structure a student's edits preserve — giving reliable matching even across multiple assignments in the same session.
-- **Consistent, granular scoring.** All scores are expressed in clean 0.5-point increments, both at the rubric level and in final grades, for clarity and consistency across a class.
-- **Specific, criterion-level feedback.** Every grade includes a breakdown by rubric criterion — what was awarded, what was possible, and why — giving students clear, actionable feedback rather than a single opaque number.
-- **Resilient grading pipeline.** AI requests are served through a two-tier Gemini system (a primary model, with automatic fallback to a second Gemini model on quota/rate-limit errors), and batch grading runs report progress per student and continue through the full class list even if an individual submission needs attention — keeping instructors informed without interrupting the run.
+- [What It Does](#what-it-does)
+- [Tech Stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [Install](#install)
+- [Environment Variables](#environment-variables)
+- [Run It](#run-it)
+- [Example Usage](#example-usage)
+- [Demo Video](#demo-video)
+- [Project Status](#project-status)
+- [MCP Server](#mcp-server)
+- [Database Migrations](#database-migrations)
+- [Demo Accounts](#demo-accounts)
+- [Security Notes](#security-notes)
+- [Testing](#testing)
+- [Team](#team)
+
+## What It Does
+
+- **AI grading, not a rubric you have to write.** For every unsolved assignment file, the system generates its own 10-point rubric that is *completion-aware* — pre-written scaffolding earns little, the sections a student actually had to complete earn most — then evaluates every submission against it with 0.5-point granularity and a full, criterion-by-criterion rationale.
+- **A RAG-grounded student chatbot.** Instructors upload `.pptx` lectures; the system chunks and embeds them (plus every assignment notebook's own instructional text) into a local vector store. Students ask questions and get answers grounded in that real, cited material — with a strict "explain, never solve" rule that refuses to hand over the answer to an incomplete assignment.
+- **Ungraded practice quizzes.** Students can generate a 5-question multiple-choice quiz from an assignment, a session, several sessions, a free-text topic, or a one-off uploaded file — always clearly labeled as practice and never touching a real grade.
+- **Two doors, one engine.** Every capability above is also exposed as an MCP (Model Context Protocol) tool for MCP-compatible clients (Claude Desktop, an IDE), sharing the exact same backend service code as the REST API — not a second, drifting implementation.
 
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
 | Backend API | Python 3.13 + FastAPI |
-| Database | SQLite (SQLAlchemy ORM) |
+| Database | SQLite (SQLAlchemy ORM), schema changes via Alembic migrations |
 | File storage | Local filesystem, structured per-session |
 | Auth | JWT (bcrypt password hashing) |
-| AI — primary | Gemini API (`gemini-3.5-flash-lite`) |
-| AI — fallback | Gemini API (`gemini-3.1-flash-lite`, on quota/rate-limit) |
+| AI — primary / fallback | Gemini API (`gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` on quota/rate-limit) |
+| Vector store | Chroma (embedded, file-based — no separate server process) |
+| Embeddings | Local `sentence-transformers` (`all-MiniLM-L6-v2`) — never Gemini's own embedding API |
+| Lecture parsing | `python-pptx` (`.pptx` only; legacy `.ppt` is explicitly rejected) |
 | Notebook parsing | `nbformat`, recursive `.zip` extraction |
-| Session matching | Fuzzy text matching |
-| MCP server | Python MCP SDK |
-| Frontend | Next.js *(in development)* |
+| Session/chat matching | `rapidfuzz` + retrieval-similarity resolution |
+| MCP server | Python `mcp` SDK (2.x), stdio transport, 11 tools |
+| Frontend | Next.js 16.3.4 (App Router, TypeScript, Tailwind CSS 4) |
+| Testing | `pytest` (backend, 760+ tests) · Vitest + Testing Library (frontend, 240+ tests) |
 
-## Getting Started
+## Prerequisites
 
-**1. Install dependencies**
+- Python 3.11+ (developed and tested against Python 3.13 in a conda `base` environment)
+- Node.js 18+ (frontend developed against Next.js 16.3.4)
+- A Google Gemini API key — [Google AI Studio](https://aistudio.google.com/app/apikey)
+- ~500 MB free disk (local embedding model + Chroma vector store are downloaded/created on first use)
+
+## Install
+
 ```bash
+git clone https://github.com/zeenat-mustafa/AI-Assistant-for-LMS.git
+cd AI-Assistant-for-LMS
+
+# Backend
 cd backend
 pip install -r requirements.txt
+cp .env.example .env          # then fill in real values — see below
+
+# Frontend
+cd ../frontend
+npm install
+cp .env.example .env.local    # adjust only if the backend runs elsewhere
 ```
 
-**2. Configure environment**
-```bash
-cp .env.example .env
-```
-Fill in `.env` with:
-- `GEMINI_API_KEY` — from [Google AI Studio](https://aistudio.google.com/app/apikey)
-- `SECRET_KEY` — generate one with `python -c "import secrets; print(secrets.token_hex(32))"`
+## Environment Variables
 
-Optionally override the model names with `GEMINI_PRIMARY_MODEL` / `GEMINI_FALLBACK_MODEL` (they default to the two models above).
+**`backend/.env`** (copy from `backend/.env.example`):
 
-**3. Run the application**
+| Variable | Required | Default / example | Notes |
+|---|---|---|---|
+| `GEMINI_API_KEY` | **Yes** | *(none)* | From [Google AI Studio](https://aistudio.google.com/app/apikey). Never commit this — `.env` is already in `.gitignore`. |
+| `SECRET_KEY` | **Yes** for anything beyond local demo | placeholder string | Generate a real one: `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `DATABASE_URL` | No | `sqlite:///./lms.db` | Relative to `backend/` — must run the app from that directory (`start-all.ps1` and the commands below already do). |
+| `STORAGE_ROOT` | No | `storage/sessions` | Where uploaded assignment/submission/lecture files are written. |
+| `ALGORITHM` | No | `HS256` | JWT signing algorithm. |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | No | `480` | JWT lifetime. |
+| `GEMINI_PRIMARY_MODEL` | No | `gemini-3.5-flash-lite` | Serves every AI call unless it hits quota/rate-limit. |
+| `GEMINI_FALLBACK_MODEL` | No | `gemini-3.1-flash-lite` | Used automatically on the primary's quota/rate-limit error. |
+| `DEMO_INSTRUCTOR_EMAIL` / `DEMO_INSTRUCTOR_PASSWORD` | No | `instructor@demo.com` / `instructor123` | Seeded on first startup. |
+| `DEMO_STUDENT_EMAIL` / `DEMO_STUDENT_PASSWORD` | No | `student@demo.com` / `student123` | Seeded on first startup. |
 
-**Option A: Start both backend and frontend together (recommended for demos)**
+**`frontend/.env.local`** (copy from `frontend/.env.example`):
+
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `NEXT_PUBLIC_API_BASE_URL` | **Yes** | `http://127.0.0.1:8000/api/v1` | Where the frontend expects the FastAPI backend. The backend's CORS config allows `localhost:3000` / `127.0.0.1:3000` by default. |
+
+## Run It
+
+**Option A — one command (recommended for demos):**
 ```powershell
 .\start-all.ps1
 ```
-This single command starts both services with clearly prefixed output. The backend runs without auto-reload for demo stability. Press `Ctrl+C` to stop both cleanly.
+Starts both services with clearly prefixed output; the backend runs without auto-reload for demo stability. Press `Ctrl+C` to stop both cleanly.
 
-- Backend: **http://127.0.0.1:8000** (API docs at `/docs`)
-- Frontend: **http://localhost:3000**
+**Option B — run separately (recommended for development, gives auto-reload):**
 
-On first run, the backend creates the SQLite database and seeds two demo accounts (see below).
-
-**Option B: Run backend and frontend separately**
-
-Terminal 1 (backend):
+Terminal 1:
 ```bash
 cd backend
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
-
-Terminal 2 (frontend):
+Terminal 2:
 ```bash
 cd frontend
 npm run dev
 ```
 
-Use this option during active development when you want auto-reload on code changes.
+Either way:
+- Backend: **http://127.0.0.1:8000** (interactive API docs at `/docs`)
+- Frontend: **http://localhost:3000**
 
-## Database Migrations
+On first run, the backend creates the SQLite database, seeds the demo accounts below, and warms up the embedding model and the Gemini connection so the first real request isn't slow.
 
-Schema changes are managed with [Alembic](https://alembic.sqlalchemy.org/), configured in `backend/alembic/`. `Base.metadata.create_all()` still runs on every startup, but it only ever matters for a brand-new, empty database — it cannot alter tables that already exist. **Any schema change to a database that already has data in it must go through a migration, never through `create_all()` alone** (this is exactly how a `graded` column once went missing from a live database after a merge, requiring a manual `ALTER TABLE` to fix).
+## Example Usage
 
-**Apply pending migrations** (run this after pulling any change that touches a model):
-```bash
-cd backend
-alembic upgrade head
-```
+1. Sign in at `http://localhost:3000` as `instructor@demo.com` / `instructor123`.
+2. Create a session (e.g. "Week 1 Day 1"), then upload an unsolved `.ipynb` file as its assignment.
+3. Sign in as `student@demo.com` / `student123` in a different browser tab (or a private window — sessions are per-tab), download the assignment, and upload a solved copy back.
+4. Back as the instructor, open the floating grading-chat widget and type:
+   ```
+   grade Week 1 Day 1
+   ```
+   Grading progress streams live, then a summary is shown; the grade roster now shows the student's score and full rationale.
+5. As the student, open the floating course-assistant widget and ask a real question about the uploaded material, e.g.:
+   ```
+   What is this assignment asking me to build in the first section?
+   ```
+   The answer streams back with citations to the real lecture slide or notebook cell it came from. Click **Quiz me** in the same widget to generate a short, ungraded practice quiz on the same material.
 
-**After changing a model**, generate a migration for it, then review the autogenerated file before committing — Alembic is good but not infallible, especially around renames, index changes, and SQLite's limited `ALTER TABLE` support:
-```bash
-alembic revision --autogenerate -m "short description of the change"
-```
+## Demo Video
 
-The baseline migration (`alembic/versions/a2ea273de1f2_baseline_current_schema.py`) represents the schema as of Phase 2's close — it is not meant to be regenerated or rewritten; every future schema change is a new migration on top of it.
+**[ Add the demo video link here before submission — e.g. an unlisted YouTube/Drive link showing the flow above end to end ]**
+
+## Project Status
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | Authentication, session management, assignment/submission upload and download, database schema | ✅ Complete |
+| 2 | AI grading pipeline — notebook parsing, submission matching, rubric generation, evaluation, feedback, dual-provider AI layer, batch grading | ✅ Complete |
+| 3 | Instructor chatbot — natural-language session resolution and live-updating grading runs | ✅ Complete |
+| 4 | MCP server — grading pipeline exposed as standardized callable tools | ✅ Complete |
+| 5 | Next.js web dashboard for instructors and students | ✅ Complete |
+| 6 | Integration testing, polish, and demo preparation | ✅ Complete |
+| 7.1–7.6 | RAG pipeline — lecture ingestion, Chroma embeddings, "explain never solve" scope safety, chat memory, student Q&A chatbot, practice quizzes | ✅ Complete |
+| 7.7 | Student chat & quiz frontend, instructor lecture-upload UI | ✅ Complete |
+| 7.8 | Full UI/UX redesign, MCP tool expansion (11 tools total), demo-readiness hardening | ✅ Complete |
+
+See `docs/phase*-known-gaps-record.txt` for the full, evidence-based record of every known gap, deliberate scope decision, and later resolution across each phase.
 
 ## MCP Server
 
-Alongside the REST API, the project exposes a [Model Context Protocol](https://modelcontextprotocol.io) server so an MCP client (Claude Desktop, an IDE, or the SDK's own client) can drive grading directly. It is a **separate process** from the FastAPI app, not a replacement for it — both talk to the same database.
+Alongside the REST API, the project exposes a [Model Context Protocol](https://modelcontextprotocol.io) server so an MCP client (Claude Desktop, an IDE, or the SDK's own client) can drive grading, retrieval, and quizzes directly. It is a **separate process** from the FastAPI app, not a replacement for it — both talk to the same database, and every tool below calls the exact same service-layer function the REST API uses (no logic is duplicated between the two interfaces).
 
 **Start it:**
 ```bash
@@ -102,7 +174,7 @@ cd backend
 python -m app.mcp
 ```
 
-It speaks JSON-RPC over **stdio**, so it prints no banner, binds no port, and blocks waiting for a client — that is expected, not a hang. Normally you don't start it by hand; an MCP client launches it as a subprocess. Example client config:
+It speaks JSON-RPC over **stdio**, so it prints no banner, binds no port, and blocks waiting for a client — that is expected, not a hang. Example client config:
 
 ```json
 {
@@ -118,24 +190,37 @@ It speaks JSON-RPC over **stdio**, so it prints no banner, binds no port, and bl
 
 `cwd` matters: the SQLite path in `DATABASE_URL` is relative, so a client launching the server from elsewhere would silently create a different, empty database.
 
-**Available tools**
+**Available tools (11 + `ping`)**
 
-| Tool | Arguments | Purpose |
-|---|---|---|
-| `ping` | none | Connectivity check — returns `pong - AI Assistant for LMS MCP server is running`. Useful for confirming a client's server config (especially `cwd`) before debugging anything else. |
-| `match_session` | `instruction: str`, `instructor_id: int` | Resolves a free-text instruction ("grade week 8 day 3") to one of that instructor's sessions. Returns `matched` / `ambiguous` / `no_match` — the same result the REST `/chat` endpoint uses, since both call the identical matcher. |
-| `generate_rubric` | `unsolved_file_id: int`, `force: bool = false` | Generates the 10-point rubric for one assignment file, or returns the cached one. Rubrics are generated once per assignment and reused for every student, so repeat calls cost nothing unless `force=true`. |
-| `evaluate_submission` | `submission_file_id: int` | Evaluates one student notebook against its assignment's rubric, returning a score out of 10 plus a criterion-by-criterion breakdown. Generates the rubric first if the assignment doesn't have one. Reports what it found — it does **not** record a grade. |
-| `grade_submission_file` | `submission_file_id: int` | Grades one student notebook **and records the grade**. Re-grading overwrites the existing grade. |
-| `grade_session` | `session_id: int`, `student_id: int \| null = null` | Grades every ungraded submission in a session, optionally for one student. Returns all per-file progress events plus a summary — the same payload as REST's `POST /sessions/{id}/grade`. Already-graded files are skipped, so re-running is safe. |
+| Tool | Purpose |
+|---|---|
+| `ping` | Connectivity check. |
+| `match_session` | Resolves a free-text instruction to a session — same matcher the REST `/chat` endpoint uses. |
+| `generate_rubric` | Generates (or returns the cached) 10-point rubric for one assignment file. |
+| `evaluate_submission` | Evaluates one submission against its rubric without recording a grade. |
+| `grade_submission_file` | Grades one submission and records the grade. |
+| `grade_session` | Grades every ungraded submission in a session (optionally one student), draining the full pipeline before returning. |
+| `list_lecture_files` | Lists lecture files uploaded to a session. |
+| `upload_lecture_file` | Uploads a `.pptx` lecture file — same extraction/chunking/embedding path as the REST upload. |
+| `ask_course_assistant` | The student chatbot, collected into one response (the streaming REST endpoint's SSE events, drained). |
+| `generate_quiz` | Generates a 5-question practice quiz from any of four scope types (a fifth, one-off file upload, is REST-only). |
+| `submit_quiz` | Scores a practice quiz attempt once — never touches the real `Grade` table. |
 
-`ambiguous` and `no_match` are normal outcomes, not errors: the matcher never force-matches on a close call, so the client should ask which session was meant rather than guessing.
-
-`generate_rubric` with `force=true` adds a `warning` field if submissions were already graded against the previous rubric — those grades reference criteria that may no longer exist. Nothing is re-graded automatically; the count is surfaced so the instructor can decide.
-
-`grade_session` runs to completion before returning — an MCP tool call is a single request/response, not a stream, so it drains the pipeline and returns everything at once, exactly as the non-streaming REST batch endpoint does. For live per-file progress, use the SSE endpoint `POST /chat/stream` instead.
+`ambiguous` / `clarification_needed` results are normal outcomes, not errors — the system never force-matches on a close call.
 
 > **SDK note:** built against `mcp` 2.x, where the high-level server class is `MCPServer`. Most tutorials still show 1.x's `FastMCP`, which will not run as-is against 2.x.
+
+## Database Migrations
+
+Schema changes are managed with [Alembic](https://alembic.sqlalchemy.org/), configured in `backend/alembic/`. `Base.metadata.create_all()` still runs on every startup, but it only ever matters for a brand-new, empty database — it cannot alter tables that already exist. **Any schema change to a database that already has data in it must go through a migration, never through `create_all()` alone.**
+
+```bash
+cd backend
+alembic upgrade head        # apply pending migrations (run after pulling)
+alembic revision --autogenerate -m "short description"   # after changing a model
+```
+
+Review every autogenerated migration before committing — Alembic is good but not infallible, especially around renames and SQLite's limited `ALTER TABLE` support.
 
 ## Demo Accounts
 
@@ -145,23 +230,30 @@ It speaks JSON-RPC over **stdio**, so it prints no banner, binds no port, and bl
 | Instructor (multi-tenant testing) | `instructor2@demo.com` | `instructor2123` |
 | Instructor (multi-tenant testing) | `instructor3@demo.com` | `instructor3123` |
 | Student | `student@demo.com` | `student123` |
+| Student (multi-tenant testing) | `student2@demo.com` – `student4@demo.com` | see `app/services/auth.py` |
 
-`instructor2@demo.com` and `instructor3@demo.com` own their own separate sessions, distinct from `instructor@demo.com` — added to test cross-instructor behavior for real, since the app has never been exercised with more than one instructor account before.
+These are seeded automatically on first startup. **Never use real, non-demo credentials for testing.** Replace `SECRET_KEY` with a securely generated value before any shared or hosted deployment.
 
-These are seeded automatically for local development. Replace `SECRET_KEY` with a securely generated value before any shared or hosted deployment.
+## Security Notes
 
-## Project Status
+- **API keys are never committed.** `backend/.env` (which holds `GEMINI_API_KEY` and `SECRET_KEY`) is listed in `.gitignore`; only `backend/.env.example`, with placeholder values, is tracked.
+- **Dependencies are pinned.** Every package in `backend/requirements.txt` is pinned to an exact version; `frontend/package.json` pins exact versions for its core dependencies.
+- The auth token lives in the browser's `sessionStorage`, not `localStorage`, so separate tabs can hold independent instructor/student sessions side by side without one overwriting the other.
 
-| Phase | Scope | Status |
-|---|---|---|
-| 1 | Authentication, session management, assignment/submission upload and download, database schema | ✅ Complete |
-| 2 | AI grading pipeline — notebook parsing, submission matching, rubric generation, evaluation, feedback, dual-provider AI layer, batch grading | ✅ Complete |
-| 3 | Instructor chatbot — natural-language session resolution and live-updating grading runs | ✅ Complete |
-| 4 | MCP server — grading pipeline exposed as standardized callable tools | ✅ Complete |
-| 5 | Web dashboard for instructors and students | ⏳ Upcoming |
-| 6 | Integration testing, polish, and demo preparation | ⏳ Upcoming |
+## Testing
 
-## Contributors
+```bash
+cd backend && pytest -q          # 760+ tests
+cd frontend && npm test          # 240+ tests
+```
 
-- Zeenat Mustafa
-- Laiba Afreen
+Every sub-feature in this project was verified two ways before being considered done: automated tests, and real-data/real-Gemini verification (real notebooks, real lecture files, real adversarial prompts against production Gemini) — mocked tests alone have repeatedly missed real grading-quality and safety bugs during development, so neither is treated as sufficient on its own.
+
+Before submitting, clone the repository into a fresh folder and run it from scratch following the steps above, to confirm nothing depends on local machine state.
+
+## Team
+
+- **Zeenat Mustafa**
+- **Laiba Afreen**
+
+Repository: [github.com/zeenat-mustafa/AI-Assistant-for-LMS](https://github.com/zeenat-mustafa/AI-Assistant-for-LMS)
