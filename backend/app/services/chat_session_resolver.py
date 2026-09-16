@@ -125,6 +125,12 @@ def is_conversational(question: str) -> bool:
 # always find at least something when this path is taken.
 BROAD_TOPIC_MIN_SIMILARITY = 0.35
 
+# Threshold below which retrieval similarity is uniformly low across all
+# sessions, indicating the question is NOT about course content at all (casual
+# conversation, chitchat, off-topic). When top score < this threshold, skip
+# session clarification entirely and treat as conversational.
+UNIFORMLY_LOW_THRESHOLD = 0.25
+
 
 @dataclass
 class ResolutionResult:
@@ -188,7 +194,8 @@ def resolve_session(
     3. Specific question, clear winner >= 0.55  → broad_search (one session)
     4. General topic, top >= 0.35, no clear winner → broad_search, session_id=None
        (answer retrieval runs across all sessions)
-    5. Vague reference / multi-session tie / nothing above 0.35 → clarification_needed
+    5. Uniformly low similarity, top < 0.25 → conversational (not a course question)
+    6. Vague reference / genuine ambiguity (0.25-0.35) → clarification_needed
     """
     # ── Fix 1: bypass session resolution for greetings / small talk ──────────
     if is_conversational(question):
@@ -224,7 +231,15 @@ def resolve_session(
             return ResolutionResult(status="clarification_needed", candidates=candidates)
 
         if not stats:
-            return ResolutionResult(status="clarification_needed")
+            # No course material in the database at all, OR all retrieved chunks'
+            # sessions were deleted. Treat as conversational — the student can't
+            # ask about material that doesn't exist yet.
+            return ResolutionResult(
+                status="resolved",
+                session_id=None,
+                session_title=None,
+                resolution="conversational",
+            )
 
         top_sid, top = ranked[0]
         runner_up = ranked[1][1] if len(ranked) > 1 else None
@@ -249,6 +264,21 @@ def resolve_session(
                 resolution="broad_search",
             )
 
+        # ── Fix 3: uniformly low similarity — not a course question ───────────
+        # When top score is well below the general-topic threshold, this isn't
+        # course content at all (casual conversation: "how are you", "i have a
+        # headache"). Skip clarification and send to LLM for normal reply.
+        if top["best"] < UNIFORMLY_LOW_THRESHOLD:
+            return ResolutionResult(
+                status="resolved",
+                session_id=None,
+                session_title=None,
+                resolution="conversational",
+            )
+
+        # ── Remaining case: genuine ambiguity in lower-scoring content ────────
+        # Top score is between UNIFORMLY_LOW and BROAD_TOPIC_MIN (0.25-0.35).
+        # This is real course content but weakly/ambiguously matched — ask.
         return ResolutionResult(status="clarification_needed", candidates=candidates)
     except Exception as exc:  # noqa: BLE001 — never raises, see docstring
         logger.warning(

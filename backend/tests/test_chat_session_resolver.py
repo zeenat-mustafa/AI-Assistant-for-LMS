@@ -198,11 +198,14 @@ class TestAmbiguousAsksForClarification:
         assert result.status == "clarification_needed"
         assert len(result.candidates) == MAX_CLARIFICATION_CANDIDATES
 
-    def test_zero_results_without_context_asks_with_no_candidates(self, db, monkeypatch):
+    def test_zero_results_without_context_resolves_as_conversational(self, db, monkeypatch):
+        """When retrieval returns nothing (no material in DB or uniformly low
+        similarity), treat as conversational rather than asking which session."""
         _fake_retrieve(monkeypatch, broad=[])
         result = resolve_session(db, STUDENT_ID, "What is the capital of France?")
-        assert result.status == "clarification_needed"
-        assert result.candidates == []
+        assert result.status == "resolved"
+        assert result.resolution == "conversational"
+        assert result.session_id is None
 
 
 # ===========================================================================

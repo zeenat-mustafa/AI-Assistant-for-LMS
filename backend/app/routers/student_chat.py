@@ -140,7 +140,9 @@ def student_chat_stream(
     def event_stream():
         resolution = resolve_session(db, student.id, body.question, body.current_session_id)
 
-        # ── Fix 1: greeting / small-talk — skip everything, reply directly ──
+        # ── Fix 1: greeting / small-talk bypass (fast path) ──────────────────
+        # is_conversational() caught this before any retrieval call — reply
+        # with a canned friendly prompt, no LLM call needed.
         if resolution.status == "conversational":
             friendly = (
                 "Hi! Ask me anything about your course material — "
@@ -159,6 +161,37 @@ def student_chat_stream(
             })
             return
 
+        # ── resolution.status == "resolved" from here down ────────────────────
+        # resolution.resolution can be:
+        #   "current_session" / "redirected" / "broad_search" — real course Q
+        #   "conversational" — uniformly low similarity, not a course question
+
+        # For conversational (low-similarity chitchat like "how are you", "i
+        # have a headache"), skip the resolved/citations events and go straight
+        # to LLM with no retrieval, no thread, no citations.
+        if resolution.resolution == "conversational":
+            # No resolved/citations events — the question isn't about course content.
+            # Send directly to LLM for a normal, conversational reply under the
+            # existing scope-safety rules (the prompt builder still applies).
+            prompt = build_scope_safe_prompt([], body.question, conversation_history=None)
+            parts: list[str] = []
+            try:
+                for text in call_llm_stream(prompt, purpose="student_chat"):
+                    parts.append(text)
+                    yield _sse({"event": "token", "text": text})
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "student_chat: generation failed for conversational question student=%s: %s",
+                    student.id, exc,
+                )
+                yield _sse({"event": "error", "message": STUDENT_CHAT_UNAVAILABLE_MESSAGE})
+                return
+            # No thread persistence for conversational questions (no session_id).
+            yield _sse({"event": "done", "thread_id": None,
+                        "user_message_id": None, "assistant_message_id": None})
+            return
+
+        # ── Real course-content question from here down ───────────────────────
         yield _sse({
             "event": "resolved",
             "session_id": resolution.session_id,
