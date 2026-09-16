@@ -33,6 +33,72 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ── Warmup ────────────────────────────────────────────────────────────────────
+
+async def _warmup():
+    """
+    Warm up models and API connections at startup to reduce first-request latency.
+
+    This runs once during server startup, after database setup but before serving
+    requests. It:
+    1. Loads the embedding model (sentence-transformers) — normally lazy-loaded
+       on first use, moving that cost to startup instead.
+    2. Fires a single throwaway call to the primary Gemini API to establish the
+       TLS connection and warm up the client, discarding the result.
+
+    Both operations are logged clearly as startup warmup, not real usage. Any
+    failure here is logged but does not prevent the server from starting — the
+    first real request will retry and succeed (or fail with a proper error).
+    """
+    import asyncio
+
+    # ── Embedding model ───────────────────────────────────────────────────────
+    def _load_embedding_model():
+        """Load the sentence-transformers model synchronously."""
+        from app.services.embeddings import _get_model
+        logger.info("[warmup] Loading embedding model (first use moved to startup)...")
+        try:
+            model = _get_model()
+            logger.info(
+                "[warmup] Embedding model loaded: %s",
+                model.__class__.__name__,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[warmup] Embedding model load failed (will retry on first real use): %s",
+                exc,
+            )
+
+    # ── Gemini API connection ─────────────────────────────────────────────────
+    def _warmup_gemini():
+        """Fire a single cheap call to Gemini to warm up the TLS connection."""
+        from app.services.llm_provider import call_llm, LLMProviderError
+        logger.info("[warmup] Warming up Gemini API connection...")
+        try:
+            # Single-word prompt, result discarded — this is purely to establish
+            # the network/TLS connection on the client so the first real request
+            # doesn't pay that cost.
+            _ = call_llm("Hi", purpose="startup_warmup")
+            logger.info("[warmup] Gemini API connection established.")
+        except LLMProviderError as exc:
+            logger.warning(
+                "[warmup] Gemini warmup failed (both models unavailable): %s",
+                exc,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[warmup] Gemini warmup failed (will retry on first real use): %s",
+                exc,
+            )
+
+    # Run both synchronous warmup steps in the asyncio executor so they don't
+    # block other async tasks during startup. They run in parallel for speed.
+    await asyncio.gather(
+        asyncio.to_thread(_load_embedding_model),
+        asyncio.to_thread(_warmup_gemini),
+    )
+
+
 # ── Lifespan (replaces deprecated @app.on_event) ─────────────────────────────
 
 @asynccontextmanager
@@ -53,6 +119,9 @@ async def lifespan(app: FastAPI):
         seed_demo_users(db)
     finally:
         db.close()
+
+    logger.info("Warming up models and API connections…")
+    await _warmup()
 
     logger.info("Application ready.")
     yield
