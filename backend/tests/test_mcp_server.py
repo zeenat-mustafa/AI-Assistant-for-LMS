@@ -38,7 +38,7 @@ def anyio_backend():
 
 def test_server_instantiates_with_expected_identity():
     assert server.name == "ai-assistant-for-lms"
-    assert server.version == "0.1.0"
+    assert server.version == "0.2.0"
 
 
 # ---------------------------------------------------------------------------
