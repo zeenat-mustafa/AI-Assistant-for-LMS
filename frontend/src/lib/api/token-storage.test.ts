@@ -1,14 +1,14 @@
-/** Tests for the localStorage-backed token store, including SSR safety. */
+/** Tests for the sessionStorage-backed token store, including SSR safety. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clearToken, getToken, setToken } from "@/lib/api/token-storage";
 
-/** Minimal in-memory localStorage stand-in (tests run in the node env). */
+/** Minimal in-memory sessionStorage stand-in (tests run in the node env). */
 function fakeWindow() {
   const store = new Map<string, string>();
   return {
-    localStorage: {
+    sessionStorage: {
       getItem: (k: string) => store.get(k) ?? null,
       setItem: (k: string, v: string) => void store.set(k, v),
       removeItem: (k: string) => void store.delete(k),
@@ -40,9 +40,9 @@ describe("token storage", () => {
     expect(() => clearToken()).not.toThrow();
   });
 
-  it("returns null when localStorage access throws (blocked storage)", () => {
+  it("returns null when sessionStorage access throws (blocked storage)", () => {
     vi.stubGlobal("window", {
-      localStorage: {
+      sessionStorage: {
         getItem: () => {
           throw new Error("blocked");
         },

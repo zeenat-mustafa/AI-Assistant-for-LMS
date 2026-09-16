@@ -47,7 +47,7 @@ export interface RequestOptions {
   auth?: boolean;
   /**
    * Use this token instead of the stored one. Lets non-browser callers (the
-   * verification script, tests) authenticate without `localStorage`.
+   * verification script, tests) authenticate without `sessionStorage`.
    */
   token?: string | null;
   signal?: AbortSignal;
