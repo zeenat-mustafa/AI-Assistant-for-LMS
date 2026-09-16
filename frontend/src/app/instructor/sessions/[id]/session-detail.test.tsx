@@ -14,8 +14,10 @@ import userEvent from "@testing-library/user-event";
 import { ApiError } from "@/lib/api";
 import type { AssignmentUploadRead, SessionRead, UserRead } from "@/lib/api";
 
+const routerPushMock = vi.fn();
+
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => ({ replace: vi.fn(), push: routerPushMock, refresh: vi.fn() }),
   usePathname: () => "/instructor/sessions/5",
   useSearchParams: () => new URLSearchParams(),
 }));
@@ -30,6 +32,11 @@ const deleteAssignmentMock = vi.fn();
 const getGradeReportMock = vi.fn();
 // 7.7 added the Lecture files panel to this page; same reason as above.
 const listLecturesMock = vi.fn();
+// bugfix-session-rename-delete-controls: the shell's sidebar also calls this
+// (via loadAllSessions) to populate the session list next to the detail pane.
+const listSessionsMock = vi.fn();
+const renameSessionMock = vi.fn();
+const deleteSessionMock = vi.fn();
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -37,11 +44,14 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     listLectures: (...a: unknown[]) => listLecturesMock(...a),
     getSession: (...a: unknown[]) => getSessionMock(...a),
+    listSessions: (...a: unknown[]) => listSessionsMock(...a),
     listAssignments: (...a: unknown[]) => listAssignmentsMock(...a),
     uploadAssignment: (...a: unknown[]) => uploadAssignmentMock(...a),
     downloadAssignment: (...a: unknown[]) => downloadAssignmentMock(...a),
     deleteAssignment: (...a: unknown[]) => deleteAssignmentMock(...a),
     getGradeReport: (...a: unknown[]) => getGradeReportMock(...a),
+    renameSession: (...a: unknown[]) => renameSessionMock(...a),
+    deleteSession: (...a: unknown[]) => deleteSessionMock(...a),
   };
 });
 
@@ -108,6 +118,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   getSessionMock.mockResolvedValue(sessionWith([]));
   listLecturesMock.mockResolvedValue([]);
+  // Empty by default -- matches this suite's pre-existing behaviour, since the
+  // sidebar's own contents aren't under test here; see session-shell tests.
+  listSessionsMock.mockResolvedValue({ total: 0, items: [] });
   getGradeReportMock.mockResolvedValue({
     session_id: 5,
     session_title: "Week 3 Day 1",
@@ -128,6 +141,100 @@ describe("<SessionDetail /> — loading and header", () => {
     getSessionMock.mockRejectedValue(new ApiError(404, "Session 5 not found."));
     render(<SessionDetail sessionId={5} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Session 5 not found.");
+  });
+});
+
+describe("<SessionDetail /> — rename and delete (restored after the 7.8 shell dropped them)", () => {
+  it("renames a session and reflects the new title in the header", async () => {
+    renameSessionMock.mockResolvedValue({ ...sessionWith([]), title: "Week 3 Day 1 (renamed)" });
+    await renderDetail();
+
+    await userEvent.click(screen.getByRole("button", { name: /^rename$/i }));
+    const input = screen.getByLabelText(/rename "week 3 day 1"/i);
+    await userEvent.clear(input);
+    await userEvent.type(input, "Week 3 Day 1 (renamed)");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(renameSessionMock).toHaveBeenCalledWith(5, "Week 3 Day 1 (renamed)"),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Week 3 Day 1 (renamed)" }),
+    ).toBeInTheDocument();
+  });
+
+  it("rejects an empty rename without calling the API", async () => {
+    await renderDetail();
+
+    await userEvent.click(screen.getByRole("button", { name: /^rename$/i }));
+    const input = screen.getByLabelText(/rename "week 3 day 1"/i);
+    await userEvent.clear(input);
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/title is required/i);
+    expect(renameSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a rename conflict from the backend", async () => {
+    renameSessionMock.mockRejectedValue(
+      new ApiError(409, "A session titled 'Week 2 Day 1' already exists."),
+    );
+    await renderDetail();
+
+    await userEvent.click(screen.getByRole("button", { name: /^rename$/i }));
+    await userEvent.clear(screen.getByLabelText(/rename "week 3 day 1"/i));
+    await userEvent.type(screen.getByLabelText(/rename "week 3 day 1"/i), "Week 2 Day 1");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/already exists/i);
+    // Stays in the edit view (matching the dashboard's own rename behavior)
+    // so the instructor can fix the title and retry, rather than losing it.
+    expect(screen.getByLabelText(/rename "week 3 day 1"/i)).toHaveValue("Week 2 Day 1");
+  });
+
+  it("can back out of a rename without calling the API", async () => {
+    await renderDetail();
+
+    await userEvent.click(screen.getByRole("button", { name: /^rename$/i }));
+    await userEvent.type(screen.getByLabelText(/rename "week 3 day 1"/i), " extra");
+    await userEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(renameSessionMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Week 3 Day 1" })).toBeInTheDocument();
+  });
+
+  it("requires a second confirming click before deleting, then navigates away", async () => {
+    deleteSessionMock.mockResolvedValue(undefined);
+    await renderDetail();
+
+    await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    expect(deleteSessionMock).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: /confirm delete/i }));
+
+    await waitFor(() => expect(deleteSessionMock).toHaveBeenCalledWith(5));
+    await waitFor(() => expect(routerPushMock).toHaveBeenCalledWith("/instructor"));
+  });
+
+  it("can back out of a delete", async () => {
+    await renderDetail();
+
+    await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(deleteSessionMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /^delete$/i })).toBeInTheDocument();
+  });
+
+  it("surfaces a delete failure without navigating away", async () => {
+    deleteSessionMock.mockRejectedValue(new ApiError(403, "Not allowed."));
+    await renderDetail();
+
+    await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /confirm delete/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Not allowed.");
+    expect(routerPushMock).not.toHaveBeenCalled();
   });
 });
 

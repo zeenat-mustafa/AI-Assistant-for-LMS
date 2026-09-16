@@ -11,15 +11,18 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   ApiError,
   deleteAssignment,
+  deleteSession,
   downloadAssignment,
   getGradeReport,
   getSession,
   listAssignments,
   listSubmissions,
+  renameSession,
   uploadAssignment,
 } from "@/lib/api";
 import type {
@@ -121,6 +124,12 @@ function SessionDetailWithShell({ sessionId }: { sessionId: number }) {
     return () => { cancelled = true; };
   }, []);
 
+  function handleRenamedInSidebar(updated: SessionRead) {
+    setAllSessions((current) =>
+      current.map((s) => (s.id === updated.id ? { ...s, title: updated.title } : s)),
+    );
+  }
+
   return (
     <SessionShell
       sessions={allSessions}
@@ -130,17 +139,35 @@ function SessionDetailWithShell({ sessionId }: { sessionId: number }) {
       listLabel="Sessions"
       loading={shellLoading}
     >
-      <SessionDetailBody sessionId={sessionId} />
+      <SessionDetailBody sessionId={sessionId} onRenamed={handleRenamedInSidebar} />
     </SessionShell>
   );
 }
 
 // ── Detail body (logic unchanged from 7.7) ────────────────────────────────────
 
-function SessionDetailBody({ sessionId }: { sessionId: number }) {
+function SessionDetailBody({
+  sessionId,
+  onRenamed,
+}: {
+  sessionId: number;
+  onRenamed: (updated: SessionRead) => void;
+}) {
+  const router = useRouter();
   const [session, setSession] = useState<SessionRead | null>(null);
   const [uploads, setUploads] = useState<AssignmentUploadRead[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Rename state
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renamePending, setRenamePending] = useState(false);
+
+  // Delete state
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletePending, setDeletePending] = useState(false);
 
   const [report, setReport] = useState<SessionGradeReport | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
@@ -213,6 +240,54 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
     return () => { cancelled = true; };
   }, [lastCompletion, sessionTitle, sessionId]);
 
+  function startRename() {
+    if (!session) return;
+    setRenameValue(session.title);
+    setRenameError(null);
+    setIsRenaming(true);
+  }
+
+  function cancelRename() {
+    setIsRenaming(false);
+    setRenameError(null);
+  }
+
+  async function saveRename() {
+    if (!session) return;
+    const trimmed = renameValue.trim();
+    if (!trimmed) { setRenameError("Session title is required."); return; }
+    if (trimmed === session.title) { setIsRenaming(false); return; }
+    setRenameError(null);
+    setRenamePending(true);
+    try {
+      const updated = await renameSession(session.id, trimmed);
+      setSession(updated);
+      onRenamed(updated);
+      setIsRenaming(false);
+    } catch (error) {
+      setRenameError(
+        error instanceof ApiError ? error.detail : "Could not rename this session.",
+      );
+    } finally {
+      setRenamePending(false);
+    }
+  }
+
+  async function handleDeleteSession() {
+    if (!session) return;
+    setDeleteError(null);
+    setDeletePending(true);
+    try {
+      await deleteSession(session.id);
+      router.push("/instructor");
+    } catch (error) {
+      setDeleteError(
+        error instanceof ApiError ? error.detail : `Could not delete "${session.title}".`,
+      );
+      setDeletePending(false);
+    }
+  }
+
   if (loadError) {
     return <FormError>{loadError}</FormError>;
   }
@@ -223,10 +298,64 @@ function SessionDetailBody({ sessionId }: { sessionId: number }) {
     <div className="space-y-6">
       {/* Session header */}
       <div className="border-b border-neutral-200 pb-4">
-        <h1 className="text-2xl font-semibold text-neutral-900">{session.title}</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Created {formatDate(session.created_at)}
-        </p>
+        {isRenaming ? (
+          <div className="max-w-sm space-y-2">
+            <input
+              autoFocus
+              aria-label={`Rename "${session.title}"`}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void saveRename();
+                if (e.key === "Escape") cancelRename();
+              }}
+              disabled={renamePending}
+              className="lms-input text-lg"
+            />
+            {renameError ? <FormError>{renameError}</FormError> : null}
+            <div className="flex gap-2">
+              <SmallButton onClick={() => void saveRename()} disabled={renamePending}>
+                {renamePending ? "Saving..." : "Save"}
+              </SmallButton>
+              <SmallButton onClick={cancelRename} disabled={renamePending}>Cancel</SmallButton>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h1 className="text-2xl font-semibold text-neutral-900">{session.title}</h1>
+              <p className="mt-1 text-sm text-neutral-500">
+                Created {formatDate(session.created_at)}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <SmallButton onClick={startRename}>Rename</SmallButton>
+              {confirmingDelete ? (
+                <>
+                  <SmallButton
+                    tone="danger"
+                    onClick={() => void handleDeleteSession()}
+                    disabled={deletePending}
+                  >
+                    {deletePending ? "Deleting..." : "Confirm delete"}
+                  </SmallButton>
+                  <SmallButton onClick={() => setConfirmingDelete(false)} disabled={deletePending}>
+                    Cancel
+                  </SmallButton>
+                </>
+              ) : (
+                <SmallButton tone="danger" onClick={() => setConfirmingDelete(true)}>
+                  Delete
+                </SmallButton>
+              )}
+            </div>
+          </div>
+        )}
+        {deleteError ? (
+          <div className="mt-3">
+            <FormError>{deleteError}</FormError>
+          </div>
+        ) : null}
       </div>
 
       <UploadPanel
