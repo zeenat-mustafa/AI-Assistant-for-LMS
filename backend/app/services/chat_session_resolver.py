@@ -100,13 +100,23 @@ def is_conversational(question: str) -> bool:
     course-content signal.
 
     Rule: strip punctuation, split on whitespace; if 4 words or fewer AND
-    every word (lowercased) is in the conversational vocabulary, treat it as
-    conversational and skip session resolution entirely.
+    every word (lowercased) is in the conversational vocabulary AND the
+    question doesn't contain question words (how/what/why/when/where/which),
+    treat it as conversational and skip session resolution entirely.
+
+    Question words are excluded because "how do I..." or "what is..." are
+    legitimate course questions even when short.
     """
     cleaned = re.sub(r"[!?.,'\"]+", "", (question or "").strip().lower())
     words = cleaned.split()
     if not words:
         return False
+    
+    # Question words indicate real questions, not greetings
+    question_words = {"how", "what", "why", "when", "where", "which", "who"}
+    if any(w in question_words for w in words):
+        return False
+    
     return len(words) <= 4 and all(w in _CONVERSATIONAL_WORDS for w in words)
 
 

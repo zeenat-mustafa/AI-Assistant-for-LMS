@@ -347,6 +347,9 @@ class TestIsConversational:
         "what should I do for the TODO",
         "evaluation of AI models",
         "hi how does the agent work",   # 5 words, has "agent" → not caught
+        "how are you",  # Bug fix: looks like greeting but "how" makes it a question
+        "what are you",  # Bug fix: same - question word prevents conversational match
+        "why",  # Bug fix: single question word
         "",
     ])
     def test_course_questions_are_not_conversational(self, text):
