@@ -2,15 +2,6 @@
 
 An instructor-directed AI grading assistant for Jupyter notebook assignments, plus a retrieval-grounded student course-assistant chatbot and non-grade-affecting practice quizzes. Built as a capstone project for the Purelogics Bootcamp. Instructors create a **Session** (e.g. "Week 8 Day 4"), upload the assignment notebook and lecture slides; students download, solve, and submit their work; the instructor triggers AI grading with a single natural-language chat instruction, and students can ask a chatbot questions about lectures/assignments or generate a short practice quiz — all grounded in the instructor's own uploaded material, never a generic answer.
 
-<!--
-  SCREENSHOT — add before submitting:
-  1. Run the app (see "Run It" below) and sign in as instructor@demo.com / instructor123.
-  2. Screenshot the session dashboard (http://localhost:3000/instructor).
-  3. Save it as docs/screenshot.png and uncomment the line below.
--->
-<!-- ![AI Assistant for LMS — instructor dashboard](docs/screenshot.png) -->
-**[ Screenshot pending — see the comment in this file's source for the exact steps to add one before submission ]**
-
 ## Table of Contents
 
 - [What It Does](#what-it-does)
@@ -144,10 +135,6 @@ On first run, the backend creates the SQLite database, seeds the demo accounts b
    ```
    The answer streams back with citations to the real lecture slide or notebook cell it came from. Click **Quiz me** in the same widget to generate a short, ungraded practice quiz on the same material.
 
-## Demo Video
-
-**[ Add the demo video link here before submission — e.g. an unlisted YouTube/Drive link showing the flow above end to end ]**
-
 ## Project Status
 
 | Phase | Scope | Status |
@@ -158,9 +145,7 @@ On first run, the backend creates the SQLite database, seeds the demo accounts b
 | 4 | MCP server — grading pipeline exposed as standardized callable tools | ✅ Complete |
 | 5 | Next.js web dashboard for instructors and students | ✅ Complete |
 | 6 | Integration testing, polish, and demo preparation | ✅ Complete |
-| 7.1–7.6 | RAG pipeline — lecture ingestion, Chroma embeddings, "explain never solve" scope safety, chat memory, student Q&A chatbot, practice quizzes | ✅ Complete |
-| 7.7 | Student chat & quiz frontend, instructor lecture-upload UI | ✅ Complete |
-| 7.8 | Full UI/UX redesign, MCP tool expansion (11 tools total), demo-readiness hardening | ✅ Complete |
+| 7 | RAG pipeline (lecture ingestion, Chroma embeddings, "explain never solve" scope safety, chat memory), student Q&A chatbot with citations, practice quizzes, the full student/instructor chat frontend, MCP tool expansion (11 tools total), and the full UI/UX redesign | ✅ Complete |
 
 See `docs/phase*-known-gaps-record.txt` for the full, evidence-based record of every known gap, deliberate scope decision, and later resolution across each phase.
 
