@@ -1,14 +1,11 @@
 """
 Phase 7, Sub-feature 7.5: student Q&A chatbot — POST /student-chat/stream.
 
-The first live caller of 7.1-7.4 together: resolves which session a question
-belongs to (chat_session_resolver), uses that session's 7.4 memory thread,
-retrieves that session's material (7.2), assembles the 7.3 scope-safe prompt
-(unchanged — no new framing is added near SCOPE_SAFETY_RULE), and streams the
-answer via llm_provider.call_llm_stream.
-
-A new router rather than an extension of chat.py: /chat is the
-instructor-only grading chat; this is student-only Q&A.
+A thin router: HTTP-specific concerns only (auth, request validation, SSE
+framing). All resolution/retrieval/reply orchestration lives in
+app.services.student_chat_service.run_student_chat, shared with the MCP
+tool (app/mcp/tools/student_chat_tools.py) — Phase 7.8 audit fix (Item 1),
+so the branching can never drift between the two callers again.
 
 Student-only (require_student): conversation threads are keyed to a student,
 and the scope-safety rule is written for students working on assignments.
@@ -47,31 +44,14 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.conversation import MessageRole
-from app.models.lecture_file import LectureFile
 from app.models.session import LMSSession
-from app.models.unsolved_file import UnsolvedFile
 from app.models.user import User
 from app.services.auth import require_student
-from app.services.chat_memory import add_message, get_context_for_prompt, get_or_create_thread
-from app.services.chat_safety import build_scope_safe_prompt
-from app.services.chat_session_resolver import build_clarification_message, resolve_session
-from app.services.embeddings import retrieve
-from app.services.llm_provider import call_llm_stream
+from app.services.student_chat_service import run_student_chat
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/student-chat", tags=["student-chat"])
-
-ANSWER_TOP_K = 5
-ANSWER_MIN_SIMILARITY = 0.35
-SNIPPET_CHARS = 200
-
-# Genuinely new, safe message — never a truncation of a raw provider error.
-STUDENT_CHAT_UNAVAILABLE_MESSAGE = (
-    "The course assistant is temporarily unavailable — it couldn't reach the AI "
-    "service. Please try again in a few minutes."
-)
 
 
 class StudentChatQuestion(BaseModel):
@@ -92,39 +72,6 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
-def _build_citations(db: Session, retrieved: list[dict]) -> list[dict]:
-    """Per retrieved chunk: where it came from (file, slide/cell), how similar."""
-    lecture_ids = {c["source_file_id"] for c in retrieved if c.get("source_type") == "lecture"}
-    notebook_ids = {c["source_file_id"] for c in retrieved if c.get("source_type") == "notebook"}
-    lecture_names = dict(
-        db.query(LectureFile.id, LectureFile.original_filename).filter(LectureFile.id.in_(lecture_ids)).all()
-    ) if lecture_ids else {}
-    notebook_names = dict(
-        db.query(UnsolvedFile.id, UnsolvedFile.original_filename).filter(UnsolvedFile.id.in_(notebook_ids)).all()
-    ) if notebook_ids else {}
-
-    citations = []
-    for chunk in retrieved:
-        source_type = chunk.get("source_type")
-        citation = {
-            "source_type": source_type,
-            "source_file_id": chunk.get("source_file_id"),
-            "session_id": chunk.get("session_id"),
-            "similarity": chunk.get("similarity"),
-            "snippet": (chunk.get("chunk_text") or "")[:SNIPPET_CHARS],
-        }
-        if source_type == "lecture":
-            citation["filename"] = lecture_names.get(chunk.get("source_file_id"))
-            citation["slide_number"] = chunk.get("slide_number")
-            citation["source"] = chunk.get("source")
-        elif source_type == "notebook":
-            citation["filename"] = notebook_names.get(chunk.get("source_file_id"))
-            citation["cell_index"] = chunk.get("cell_index")
-            citation["cell_type"] = chunk.get("cell_type")
-        citations.append(citation)
-    return citations
-
-
 @router.post(
     "/stream",
     summary="Ask the course assistant a question and stream the answer via SSE (student only)",
@@ -138,138 +85,7 @@ def student_chat_stream(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
 
     def event_stream():
-        resolution = resolve_session(db, student.id, body.question, body.current_session_id)
-
-        # ── Fix 1: greeting / small-talk bypass (fast path) ──────────────────
-        # is_conversational() caught this before any retrieval call — reply
-        # with a canned friendly prompt, no LLM call needed.
-        if resolution.status == "conversational":
-            friendly = (
-                "Hi! Ask me anything about your course material — "
-                "lectures, assignments, or concepts you'd like explained."
-            )
-            yield _sse({"event": "token", "text": friendly})
-            yield _sse({"event": "done", "thread_id": None,
-                        "user_message_id": None, "assistant_message_id": None})
-            return
-
-        if resolution.status != "resolved":
-            yield _sse({
-                "event": "clarification_needed",
-                "message": build_clarification_message(resolution.candidates),
-                "candidates": resolution.candidates,
-            })
-            return
-
-        # ── resolution.status == "resolved" from here down ────────────────────
-        # resolution.resolution can be:
-        #   "current_session" / "redirected" / "broad_search" — real course Q
-        #   "conversational" — uniformly low similarity, not a course question
-
-        # For conversational (low-similarity chitchat like "how are you", "i
-        # have a headache"), skip the resolved/citations events and go straight
-        # to LLM with no retrieval, no thread, no citations.
-        if resolution.resolution == "conversational":
-            # No resolved/citations events — the question isn't about course content.
-            # Send directly to LLM for a normal, conversational reply under the
-            # existing scope-safety rules (the prompt builder still applies).
-            prompt = build_scope_safe_prompt([], body.question, conversation_history=None)
-            parts: list[str] = []
-            try:
-                for text in call_llm_stream(prompt, purpose="student_chat"):
-                    parts.append(text)
-                    yield _sse({"event": "token", "text": text})
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "student_chat: generation failed for conversational question student=%s: %s",
-                    student.id, exc,
-                )
-                yield _sse({"event": "error", "message": STUDENT_CHAT_UNAVAILABLE_MESSAGE})
-                return
-            # No thread persistence for conversational questions (no session_id).
-            yield _sse({"event": "done", "thread_id": None,
-                        "user_message_id": None, "assistant_message_id": None})
-            return
-
-        # ── Real course-content question from here down ───────────────────────
-        yield _sse({
-            "event": "resolved",
-            "session_id": resolution.session_id,
-            "session_title": resolution.session_title,
-            "resolution": resolution.resolution,
-        })
-
-        thread = get_or_create_thread(db, student.id, resolution.session_id) if resolution.session_id is not None else None
-        context = get_context_for_prompt(db, thread) if thread is not None else None
-        # Fix 2: session_id=None here triggers cross-session retrieval for
-        # general/multi-session topics (resolution.session_id is None when
-        # broad_search resolved without a clear single winner).
-        retrieved = retrieve(
-            body.question, session_id=resolution.session_id,
-            top_k=ANSWER_TOP_K, min_similarity=ANSWER_MIN_SIMILARITY,
-        )
-
-        # Fix 3: only emit citations when real material was retrieved — suppress
-        # on the no-material path (handled below) and implicitly on the
-        # greeting path (which already returned above).
-        if retrieved:
-            yield _sse({"event": "citations", "citations": _build_citations(db, retrieved)})
-
-        # ── Short-circuit: nothing retrieved above the similarity threshold ──
-        # Only skip to the canned message when there is also no conversation
-        # history.  If history exists, proceed to the full LLM call — the
-        # model can answer follow-ups ("tell me more", "go deeper") using
-        # context alone, even when the current turn's retrieval is weak.
-        has_history = context is not None and (
-            context.get("rolling_summary") is not None
-            or bool(context.get("recent_messages"))
-        )
-        if not retrieved and not has_history:
-            no_material_answer = (
-                "I couldn't find anything about that in your course material. "
-                "Try rephrasing, or ask about a specific topic from your lectures or assignments."
-            )
-            yield _sse({"event": "token", "text": no_material_answer})
-            if thread is not None:
-                user_message = add_message(db, thread, MessageRole.user, body.question)
-                assistant_message = add_message(db, thread, MessageRole.assistant, no_material_answer)
-                yield _sse({
-                    "event": "done",
-                    "thread_id": thread.id,
-                    "user_message_id": user_message.id,
-                    "assistant_message_id": assistant_message.id,
-                })
-            else:
-                yield _sse({"event": "done", "thread_id": None,
-                            "user_message_id": None, "assistant_message_id": None})
-            return
-
-        prompt = build_scope_safe_prompt(retrieved, body.question, conversation_history=context)
-
-        parts: list[str] = []
-        try:
-            for text in call_llm_stream(prompt, purpose="student_chat"):
-                parts.append(text)
-                yield _sse({"event": "token", "text": text})
-        except Exception as exc:  # noqa: BLE001 — never surface raw provider errors
-            logger.error(
-                "student_chat: generation failed for student=%s session=%s: %s",
-                student.id, resolution.session_id, exc,
-            )
-            yield _sse({"event": "error", "message": STUDENT_CHAT_UNAVAILABLE_MESSAGE})
-            return
-
-        if thread is not None:
-            user_message = add_message(db, thread, MessageRole.user, body.question)
-            assistant_message = add_message(db, thread, MessageRole.assistant, "".join(parts))
-            yield _sse({
-                "event": "done",
-                "thread_id": thread.id,
-                "user_message_id": user_message.id,
-                "assistant_message_id": assistant_message.id,
-            })
-        else:
-            yield _sse({"event": "done", "thread_id": None,
-                        "user_message_id": None, "assistant_message_id": None})
+        for event in run_student_chat(db, student.id, body.question, body.current_session_id):
+            yield _sse(event)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

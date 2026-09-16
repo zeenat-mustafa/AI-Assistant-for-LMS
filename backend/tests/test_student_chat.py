@@ -26,8 +26,8 @@ from app.models.lecture_file import LectureFile
 from app.models.session import LMSSession
 from app.models.unsolved_file import UnsolvedFile
 from app.models.user import User, UserRole
-from app.routers import student_chat
 from app.services import chat_session_resolver
+from app.services import student_chat_service
 from app.services.auth import create_access_token
 from app.services.chat_safety import SCOPE_SAFETY_RULE
 from app.services.chat_session_resolver import ResolutionResult
@@ -129,9 +129,9 @@ def fakes(monkeypatch):
                 raise item
             yield item
 
-    monkeypatch.setattr(student_chat, "resolve_session", fake_resolve)
-    monkeypatch.setattr(student_chat, "retrieve", fake_retrieve)
-    monkeypatch.setattr(student_chat, "call_llm_stream", fake_stream)
+    monkeypatch.setattr(student_chat_service, "resolve_session", fake_resolve)
+    monkeypatch.setattr(student_chat_service, "retrieve", fake_retrieve)
+    monkeypatch.setattr(student_chat_service, "call_llm_stream", fake_stream)
     return state
 
 
@@ -205,7 +205,7 @@ class TestClarificationPath:
         self, client, student_headers, db, monkeypatch, question, similarity,
     ):
         """End-to-end through the REAL resolver: only its retrieval is faked."""
-        monkeypatch.setattr(student_chat, "resolve_session", chat_session_resolver.resolve_session)
+        monkeypatch.setattr(student_chat_service, "resolve_session", chat_session_resolver.resolve_session)
         monkeypatch.setattr(
             chat_session_resolver, "retrieve",
             lambda query, session_id=None, top_k=5, min_similarity=0.35: (
@@ -216,7 +216,7 @@ class TestClarificationPath:
         def must_not_generate(*args, **kwargs):
             raise AssertionError("no generation on the clarification path")
 
-        monkeypatch.setattr(student_chat, "call_llm_stream", must_not_generate)
+        monkeypatch.setattr(student_chat_service, "call_llm_stream", must_not_generate)
 
         response = client.post(URL, json={"question": question}, headers=student_headers)
         events = _events(response)
@@ -315,7 +315,7 @@ class TestGenerationFailure:
         events = _events(client.post(URL, json={"question": "q"}, headers=student_headers))
 
         assert [e["event"] for e in events] == ["resolved", "citations", "error"]
-        assert events[-1]["message"] == student_chat.STUDENT_CHAT_UNAVAILABLE_MESSAGE
+        assert events[-1]["message"] == student_chat_service.STUDENT_CHAT_UNAVAILABLE_MESSAGE
         assert "quota_metric" not in json.dumps(events) and "Both Gemini" not in json.dumps(events)
         assert db.query(ConversationMessage).count() == 0
 
@@ -348,7 +348,7 @@ class TestConversationalBypass:
             retrieve_calls.append(query)
             return []
 
-        monkeypatch.setattr(student_chat, "retrieve", fake_retrieve)
+        monkeypatch.setattr(student_chat_service, "retrieve", fake_retrieve)
         # Let the REAL resolve_session run (don't replace it with fakes fixture).
         events = _events(
             client.post(URL, json={"question": "hi"}, headers=student_headers)
@@ -359,7 +359,7 @@ class TestConversationalBypass:
         assert db.query(ConversationThread).count() == 0
 
     def test_greeting_produces_no_citations(self, client, student_headers, monkeypatch, db):
-        monkeypatch.setattr(student_chat, "retrieve", lambda *a, **kw: [])
+        monkeypatch.setattr(student_chat_service, "retrieve", lambda *a, **kw: [])
         events = _events(
             client.post(URL, json={"question": "thanks"}, headers=student_headers)
         )
@@ -368,7 +368,7 @@ class TestConversationalBypass:
     @pytest.mark.parametrize("greeting", ["hi", "hello", "hey", "thanks", "ok", "bye"])
     def test_common_greetings_all_bypass(self, client, student_headers, monkeypatch, greeting):
         retrieve_calls = []
-        monkeypatch.setattr(student_chat, "retrieve", lambda *a, **kw: retrieve_calls.append(a) or [])
+        monkeypatch.setattr(student_chat_service, "retrieve", lambda *a, **kw: retrieve_calls.append(a) or [])
         events = _events(
             client.post(URL, json={"question": greeting}, headers=student_headers)
         )
