@@ -1,4 +1,4 @@
-/** Own-grades display: graded / ungraded / not-submitted, and no raw rationale. */
+/** Own-grades display: graded / ungraded / not-submitted, plus the per-criterion breakdown. */
 
 import { describe, expect, it } from "vitest";
 import { render, screen, within } from "@testing-library/react";
@@ -211,7 +211,12 @@ describe("<MyGradesPanel />", () => {
     expect(screen.getByText(/strong array work/i)).toBeInTheDocument();
   });
 
-  it("shows only the summary paragraph when the grade has one -- no per-criterion cards, no expand control", () => {
+  it("shows the summary paragraph AND still exposes the per-criterion breakdown behind expand/collapse (bugfix-student-rationale-visibility)", async () => {
+    // A prior revision (feature-grade-summary) hid the breakdown entirely
+    // whenever a summary was present -- since real grades always have one,
+    // that silently hid the criterion detail from every student. Now the
+    // summary is the collapsed quick-read and the breakdown is reachable,
+    // exactly as the instructor roster already shows it for this same grade.
     render(
       <MyGradesPanel
         grades={summary({
@@ -223,7 +228,7 @@ describe("<MyGradesPanel />", () => {
                   criterion: "Array reshaping",
                   points_possible: 3,
                   points_awarded: 2.5,
-                  explanation: "SHOULD-NOT-RENDER",
+                  explanation: "INTERNAL-RATIONALE-MARKER",
                 },
               ],
             }),
@@ -237,14 +242,22 @@ describe("<MyGradesPanel />", () => {
 
     expect(screen.getByText("Numpy_and_Plotting.ipynb")).toBeInTheDocument();
     expect(screen.getByText("8.5 / 10")).toBeInTheDocument();
+
+    const toggle = screen.getByRole("button", { name: /Numpy_and_Plotting/ });
     expect(
       screen.getByText(/you did strong work overall, with only the plotting section left incomplete/i),
-    ).toBeInTheDocument();
-    // No expand/collapse control and no per-criterion detail at all -- the
-    // structured rationale is still stored server-side, just never rendered here.
-    expect(screen.queryByRole("button", { name: /Numpy_and_Plotting/ })).not.toBeInTheDocument();
-    expect(screen.queryByText("Array reshaping")).not.toBeInTheDocument();
-    expect(screen.queryByText("SHOULD-NOT-RENDER")).not.toBeInTheDocument();
+    ).not.toBeVisible();
+    expect(screen.getByText("Array reshaping")).not.toBeVisible();
+
+    await userEvent.click(toggle);
+
+    expect(
+      screen.getByText(/you did strong work overall, with only the plotting section left incomplete/i),
+    ).toBeVisible();
+    expect(screen.getByText("Array reshaping")).toBeVisible();
+    expect(screen.getByText("2.5 / 3")).toBeVisible();
+    expect(screen.getByText("INTERNAL-RATIONALE-MARKER")).toBeVisible();
+    // The flat feedback text is not also shown once structured rationale exists.
     expect(screen.queryByText(/strong array work; the plotting section is incomplete/i)).not.toBeInTheDocument();
   });
 

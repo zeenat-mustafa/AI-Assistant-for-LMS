@@ -14,18 +14,21 @@
  * 1. `combined_score` is 0.0 both for a genuine zero AND for an ungraded
  *    submitter, so it is NEVER used to decide grading status. Presence in
  *    `per_file` is the signal, exactly as 5.4 resolved it instructor-side.
- * 2. `GradeRead.rationale` (the structured criterion breakdown) is still
- *    generated and stored exactly as before (reserved for a future "why did
- *    I get this grade" chatbot), but this view no longer renders it
- *    directly. (feature-grade-summary) Per graded file: if `grade.summary`
- *    is present, show ONLY that short paragraph (no per-criterion cards, no
- *    expand/collapse) via `SummaryOnlyRow` below. If `summary` is null (a
- *    grade from before this field existed), fall back to the exact same
- *    `GradeFileRow` this view always used, unchanged -- never a blank
- *    screen for historical grades.
+ * 2. (bugfix-student-rationale-visibility) Every graded file renders through
+ *    the same `GradeFileRow` the instructor roster uses, with `showSummary`
+ *    set so the short paragraph (when present) still reads as the quick
+ *    top-line take -- but the full per-criterion breakdown (`GradeRead
+ *    .rationale`) is always available beneath it via the existing
+ *    expand/collapse, exactly as the instructor already sees it for the same
+ *    grade. A prior revision (feature-grade-summary) showed ONLY the summary
+ *    paragraph whenever one was present, with no way to reach the breakdown
+ *    at all -- since real grades always have a summary, that silently hid
+ *    the criterion-by-criterion detail from every student, which is the bug
+ *    this fixes. `GradeFileRow` has no instructor-only controls, so it is
+ *    already safe to reuse here unmodified.
  */
 
-import type { GradeRead, GradeSummary, SubmissionRead } from "@/lib/api";
+import type { GradeSummary, SubmissionRead } from "@/lib/api";
 import { EmptyState, FormError, Loading } from "@/components/ui";
 import { GradeFileRow } from "@/components/grade-file-row";
 
@@ -81,13 +84,9 @@ export function MyGradesPanel({
           ) : null}
 
           <ul className="divide-y divide-neutral-100">
-            {gradedFiles.map((grade) =>
-              grade.summary ? (
-                <SummaryOnlyRow key={grade.id} grade={grade} />
-              ) : (
-                <GradeFileRow key={grade.id} grade={grade} />
-              ),
-            )}
+            {gradedFiles.map((grade) => (
+              <GradeFileRow key={grade.id} grade={grade} showSummary />
+            ))}
           </ul>
 
           {gradedFiles.length < totalAssignmentFiles ? (
@@ -99,27 +98,5 @@ export function MyGradesPanel({
         </div>
       )}
     </div>
-  );
-}
-
-/**
- * One graded file, student view, when a `summary` exists: filename + score,
- * and the summary paragraph -- no per-criterion cards, no expand/collapse.
- * The structured `rationale` for this grade is still fetched and stored
- * server-side; this row just never renders it (see file header).
- */
-function SummaryOnlyRow({ grade }: { grade: GradeRead }) {
-  return (
-    <li className="py-2">
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="truncate text-sm font-medium text-neutral-900">
-          {grade.original_filename}
-        </span>
-        <span className="shrink-0 text-sm font-medium tabular-nums text-neutral-900">
-          {grade.score} / 10
-        </span>
-      </div>
-      <p className="mt-1 text-sm text-neutral-700">{grade.summary}</p>
-    </li>
   );
 }
