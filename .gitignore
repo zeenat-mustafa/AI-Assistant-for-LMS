@@ -1,6 +1,11 @@
 # ── Planning docs (local only — not for public repo) ─────────────────────────
 agent-build-prompt.md
 
+# AI-agent working memory — internal working notes for directing the coding
+# agent (phase status, bug counts, resume instructions), not meant for a
+# public-repo/demo audience. Kept locally, not tracked.
+CLAUDE.md
+
 # ── Secrets & local config ────────────────────────────────────────────────────
 .env
 # Keep the example file — it documents what vars are needed
